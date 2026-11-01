@@ -721,3 +721,34 @@ TEST_F(ClientAuthStateTest, LoadStateSkipsClientWithBadPerm) {
   EXPECT_TRUE(get_all_clients().empty());
   EXPECT_FALSE(trusted(other_cert()));
 }
+
+class LaunchSessionTest: public testing::Test {
+protected:
+  static args_t launch_args(const std::string &rikey, const std::string &mode) {
+    return {{"rikey", rikey}, {"rikeyid", "1"}, {"mode", mode}};
+  }
+
+  crypto::named_cert_t cert {"phone", "client-uuid"};
+  const std::string key16 = "00112233445566778899aabbccddeeff";
+};
+
+TEST_F(LaunchSessionTest, RejectsWrongRikeyLength) {
+  EXPECT_THROW(make_launch_session(false, false, launch_args("0011223344556677", "1920x1080x60"), &cert), std::invalid_argument);
+  EXPECT_NO_THROW(make_launch_session(false, false, launch_args(key16, "1920x1080x60"), &cert));
+}
+
+TEST_F(LaunchSessionTest, DisplayModeFallsBackWhenInvalid) {
+  for (const char *mode : {"2556x1179", "0x0x0"}) {
+    auto session = make_launch_session(false, false, launch_args(key16, mode), &cert);
+    EXPECT_EQ(session->width, 1920) << mode;
+    EXPECT_EQ(session->height, 1080) << mode;
+    EXPECT_EQ(session->fps, 60000) << mode;
+  }
+}
+
+TEST_F(LaunchSessionTest, ParsesValidDisplayMode) {
+  auto session = make_launch_session(false, false, launch_args(key16, "2556x1179x60"), &cert);
+  EXPECT_EQ(session->width, 2556);
+  EXPECT_EQ(session->height, 1179);
+  EXPECT_EQ(session->fps, 60000);
+}

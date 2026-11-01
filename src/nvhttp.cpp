@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <string>
@@ -437,6 +438,9 @@ namespace nvhttp {
     // If launched from client
     if (named_cert_p->uuid != http::unique_id) {
       auto rikey = util::from_hex_vec(get_arg(args, "rikey"), true);
+      if (rikey.size() != 16) {
+        throw std::invalid_argument("rikey must be 16 bytes");
+      }
       std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
 
       launch_session->host_audio = host_audio;
@@ -495,7 +499,7 @@ namespace nvhttp {
     }
 
     // Parsing have failed or missing components
-    if (x != 2) {
+    if (x != 2 || launch_session->width <= 0 || launch_session->height <= 0 || launch_session->fps <= 0) {
       launch_session->width = 1920;
       launch_session->height = 1080;
       launch_session->fps = 60000; // 60fps * 1000 denominator
@@ -1344,7 +1348,7 @@ namespace nvhttp {
     // If we have already launched an app, we should allow clients with view permission to join the input only or current app's session.
     if (
       current_appid > 0
-      && (appuuid_str != TERMINATE_APP_UUID || appid != proc::terminate_app_id)
+      && (appuuid_str != TERMINATE_APP_UUID && appid != proc::terminate_app_id)
       && (is_input_only || appid == current_appid || (!appuuid_str.empty() && appuuid_str == current_app_uuid))
     ) {
       perm = PERM::_allow_view;
@@ -1472,7 +1476,7 @@ namespace nvhttp {
           return;
         }
 
-        if (!app_iter->allow_client_commands) {
+        if (!app_iter->allow_client_commands || !named_cert_p->allow_client_commands) {
           launch_session->client_do_cmds.clear();
           launch_session->client_undo_cmds.clear();
         }
@@ -1494,6 +1498,8 @@ namespace nvhttp {
       tree.put("root.<xmlattr>.status_code", 403);
       tree.put("root.<xmlattr>.status_message", "How did you get here?");
       tree.put("root.gamesession", 0);
+
+      return;
     }
 
     tree.put("root.<xmlattr>.status_code", 200);
