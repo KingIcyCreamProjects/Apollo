@@ -65,6 +65,12 @@ namespace nvhttp {
   constexpr auto PAIRING_SESSION_TIMEOUT = 5min;
 
   /**
+   * @brief How long a session waiting for a PIN holds off other clients. Moonlight does not tell
+   * the host when its PIN prompt is cancelled, so an older session may be an abandoned one.
+   */
+  constexpr auto PAIRING_PROMPT_GRACE = 60s;
+
+  /**
    * @brief The most pairing sessions kept at once, since any unauthenticated client can open one.
    */
   constexpr std::size_t MAX_PENDING_PAIRING_SESSIONS = 32;
@@ -231,6 +237,8 @@ namespace nvhttp {
 
   /**
    * @brief Give the user supplied pin to the one session waiting for it, and wait for the handshake to finish.
+   * @details Sessions past PAIRING_PROMPT_GRACE give way to newer ones. A timeout only ends the wait, so the
+   * client can still finish the handshake until the session expires.
    * @param pin The user supplied pin.
    * @param name The user supplied name.
    * @return `true` if Moonlight proved the pin by completing the handshake, `false` on a wrong pin,
