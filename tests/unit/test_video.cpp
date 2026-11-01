@@ -76,3 +76,15 @@ TEST(EncodeLimiter, WarpSeriesKeepsTargetRate) {
   EXPECT_GE(admitted, 58);
   EXPECT_LE(admitted, 62);
 }
+
+TEST(DynamicRange, FallsBackToSdrWithoutEncoderHdr) {
+  video::encoder_t encoder {};
+  video::config_t cfg {};
+  cfg.videoFormat = 1;
+  cfg.dynamicRange = 1;
+  EXPECT_EQ(0, video::resolve_dynamic_range(encoder, cfg).dynamicRange);
+  encoder.hevc[video::encoder_t::DYNAMIC_RANGE] = true;
+  EXPECT_EQ(1, video::resolve_dynamic_range(encoder, cfg).dynamicRange);
+  cfg.videoFormat = 0;
+  EXPECT_EQ(0, video::resolve_dynamic_range(encoder, cfg).dynamicRange);
+}
