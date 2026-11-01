@@ -162,6 +162,18 @@ namespace proc {
     return cmd_path.parent_path();
   }
 
+  bool proc_t::resume_virtual_display() {
+#ifdef _WIN32
+    // display_device::map_display_name is empty when dd config is disabled, so ask the OS directly.
+    LUID adapterId;
+    uint32_t targetId;
+    // Fail open when the CCD API is inaccessible (e.g. locked desktop): display state is unknown, not lost.
+    return VDISPLAY::findDisplayIds(platf::from_utf8(display_name).c_str(), adapterId, targetId) || test_no_access_to_ccd_api();
+#else
+    return true;
+#endif
+  }
+
   void proc_t::launch_input_only() {
     _app_id = input_only_app_id;
     _app_name = "Remote Input";
