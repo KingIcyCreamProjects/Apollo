@@ -178,7 +178,11 @@ namespace input {
     }
 
     ~input_t() {
-      task_pool.push([context = std::move(client_context)]() {});
+      // Reset inside the task: the capture would otherwise live on in the future's shared state and
+      // could be destroyed on this thread instead of the pool thread.
+      task_pool.push([context = std::move(client_context)]() mutable {
+        context.reset();
+      });
     }
 
     // Keep track of alt+ctrl+shift key combo
