@@ -8,7 +8,12 @@
 // standard includes
 #include <string>
 #include <chrono>
+#include <condition_variable>
 #include <list>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 
 // lib includes
 #include <boost/property_tree/ptree.hpp>
@@ -53,6 +58,16 @@ namespace nvhttp {
   constexpr auto PORT_HTTPS = -5;
 
   constexpr auto OTP_EXPIRE_DURATION = 180s;
+
+  /**
+   * @brief How long a pairing session may stay open before it is dropped.
+   */
+  constexpr auto PAIRING_SESSION_TIMEOUT = 5min;
+
+  /**
+   * @brief The most pairing sessions kept at once, since any unauthenticated client can open one.
+   */
+  constexpr std::size_t MAX_PENDING_PAIRING_SESSIONS = 32;
 
   /**
    * @brief Start the nvhttp server.
@@ -100,6 +115,15 @@ namespace nvhttp {
     CLIENTPAIRINGSECRET  ///< Sunshine is in the client pairing secret phase
   };
 
+  /**
+   * @brief The final result of a pairing session, shared with the pin() call waiting for it.
+   */
+  struct pairing_completion_t {
+    std::condition_variable condition;  ///< Wakes the waiting pin() call.
+    std::mutex mutex;  ///< Protects result.
+    std::optional<bool> result;  ///< Empty while the handshake is running. The first result wins.
+  };
+
   struct pair_session_t {
     struct {
       std::string uniqueID = {};
@@ -125,13 +149,34 @@ namespace nvhttp {
      * @brief used as a security measure to prevent out of order calls
      */
     PAIR_PHASE last_phase = PAIR_PHASE::NONE;
+
+    std::shared_ptr<pairing_completion_t> completion = std::make_shared<pairing_completion_t>();
+    std::chrono::steady_clock::time_point expires_at = std::chrono::steady_clock::time_point::max();
   };
 
   /**
+   * @brief Pairing sessions by client uniqueid. Lock map_id_sess_mutex to use them.
+   */
+  extern std::unordered_map<std::string, pair_session_t> map_id_sess;
+  extern std::mutex map_id_sess_mutex;
+
+  /**
    * @brief removes the temporary pairing session
+   * @details A pin() call waiting on the session gets a failed result, unless it already has one.
+   * The caller holds map_id_sess_mutex.
    * @param sess
    */
   void remove_session(const pair_session_t &sess);
+
+  /**
+   * @brief Handle a getservercert request by opening a pairing session.
+   * @details The caller holds map_id_sess_mutex.
+   * @param args The query arguments of the request.
+   * @param uniqID The client uniqueid.
+   * @param tree Holds the answer to the request when nullptr is returned.
+   * @return The session when it must wait for a PIN, else nullptr.
+   */
+  pair_session_t *start_pair_session(const args_t &args, const std::string &uniqID, boost::property_tree::ptree &tree);
 
   /**
    * @brief Pair, phase 1
@@ -185,10 +230,11 @@ namespace nvhttp {
   void clientpairingsecret(pair_session_t &sess, boost::property_tree::ptree &tree, const std::string &client_pairing_secret);
 
   /**
-   * @brief Compare the user supplied pin to the Moonlight pin.
+   * @brief Give the user supplied pin to the one session waiting for it, and wait for the handshake to finish.
    * @param pin The user supplied pin.
    * @param name The user supplied name.
-   * @return `true` if the pin is correct, `false` otherwise.
+   * @return `true` if Moonlight proved the pin by completing the handshake, `false` on a wrong pin,
+   * on a timeout of `ping_timeout`, or unless exactly one session is waiting for a pin.
    * @examples
    * bool pin_status = nvhttp::pin("1234", "laptop");
    * @examples_end
