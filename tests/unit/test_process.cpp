@@ -23,3 +23,11 @@ TEST(RenderSize, ScaledSizeIsEven) {
   EXPECT_EQ(proc::render_size(1178, 2556, 150), size_pair(1766, 3834));
   EXPECT_EQ(proc::render_size(1002, 2000, 125), size_pair(1252, 2500));
 }
+
+// A resume applies this rate to the existing display, so it must match what the display was created with.
+TEST(VirtualDisplayFps, MatchesCreateRules) {
+  EXPECT_EQ(proc::virtual_display_fps(120000, false), 120000);
+  EXPECT_EQ(proc::virtual_display_fps(120000, true), 240000);
+  EXPECT_EQ(proc::virtual_display_fps(0, false), 60000);
+  EXPECT_EQ(proc::virtual_display_fps(60, false), 60000);
+}

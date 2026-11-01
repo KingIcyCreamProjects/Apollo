@@ -139,6 +139,7 @@ namespace proc {
     void resume();
     /**
      * @brief Recreate the virtual display of the running app when it is gone or the client mode changed its size.
+     * A new refresh rate at the same size changes the mode of the existing display and only recreates it when that fails.
      * A client without the launch permission only checks that the display still exists.
      * @param launch_session The resuming session, its size is set to the scaled size when the display is recreated.
      * @return false if the virtual display of the running app no longer exists and the app cannot be resumed
@@ -193,6 +194,12 @@ namespace proc {
    * @return The client size with the scale factor applied, even numbered when scaled.
    */
   std::pair<uint32_t, uint32_t> render_size(int width, int height, int scale_factor);
+
+  /**
+   * @brief Calculate the refresh rate of the virtual display for a client mode.
+   * @return The rate in millihertz, doubled when double_refreshrate is set.
+   */
+  int virtual_display_fps(int fps, bool double_refreshrate);
 
   std::string validate_app_image_path(std::string app_image_path);
   void refresh(const std::string &file_name, bool needs_terminate = true);

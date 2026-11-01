@@ -179,6 +179,20 @@ namespace proc {
     return {render_width, render_height};
   }
 
+  int virtual_display_fps(int fps, bool double_refreshrate) {
+    int target_fps = fps ? fps : 60000;
+
+    if (target_fps < 1000) {
+      target_fps *= 1000;
+    }
+
+    if (double_refreshrate) {
+      target_fps *= 2;
+    }
+
+    return target_fps;
+  }
+
 #ifdef _WIN32
   bool proc_t::create_virtual_display(const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session, uint32_t render_width, uint32_t render_height) {
     if (vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
@@ -221,15 +235,7 @@ namespace proc {
 
       memcpy(&launch_session->display_guid, &device_uuid, sizeof(GUID));
 
-      int target_fps = launch_session->fps ? launch_session->fps : 60000;
-
-      if (target_fps < 1000) {
-        target_fps *= 1000;
-      }
-
-      if (config::video.double_refreshrate) {
-        target_fps *= 2;
-      }
+      const int target_fps = virtual_display_fps(launch_session->fps, config::video.double_refreshrate);
 
       std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
         device_uuid_str.c_str(),
@@ -364,7 +370,8 @@ namespace proc {
     const bool found = VDISPLAY::findDisplayIds(platf::from_utf8(display_name).c_str(), adapterId, targetId);
 
     const auto [render_width, render_height] = render_size(launch_session.width, launch_session.height, _app.scale_factor != 100 ? _app.scale_factor : launch_session.scale_factor);
-    if (found && render_width == (uint32_t) _launch_session->width && render_height == (uint32_t) _launch_session->height) {
+    const bool same_size = found && render_width == (uint32_t) _launch_session->width && render_height == (uint32_t) _launch_session->height;
+    if (same_size && launch_session.fps == _launch_session->fps) {
       return true;
     }
 
@@ -374,13 +381,37 @@ namespace proc {
       return found || test_no_access_to_ccd_api();
     }
 
+    // Removing a display can disturb the running app, so a new rate only recreates when the mode change fails.
+    // The display configuration is not rerun here, so a manual refresh rate comes back on the next launch.
+    if (same_size && VDISPLAY::changeDisplaySettings(platf::from_utf8(display_name).c_str(), render_width, render_height, virtual_display_fps(launch_session.fps, config::video.double_refreshrate)) == ERROR_SUCCESS) {
+      _launch_session->fps = launch_session.fps;
+      return true;
+    }
+
     BOOST_LOG(info) << "Recreating virtual display for client mode " << render_width << 'x' << render_height;
 
     // The driver holds a single client mode, so a new size or orientation needs a new display.
     // The identity comes from _launch_session, so the GUID stays the same and Windows sees the same monitor.
+    // A failed remove leaves the old display up, so keep streaming to it and retry on the next resume.
+    if (!VDISPLAY::removeVirtualDisplay(_launch_session->display_guid) && found) {
+      BOOST_LOG(warning) << "Cannot remove virtual display " << display_name << ", keeping its current mode";
+      return true;
+    }
     _launch_session->fps = launch_session.fps;
-    VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
-    if (!create_virtual_display(_launch_session, render_width, render_height)) {
+
+    // Clear the flag from the old display: false with it set again means the new display exists and only its device id is unknown.
+    this->virtual_display = false;
+    bool created = create_virtual_display(_launch_session, render_width, render_height);
+
+    // The driver may refuse the same GUID right after the remove, so wait before giving up on the running app.
+    for (auto delay = 100ms; !created && !this->virtual_display && vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK && delay <= 800ms; delay *= 2) {
+      // The failed attempt may still have added a display that never got a name.
+      VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
+      std::this_thread::sleep_for(delay);
+      created = create_virtual_display(_launch_session, render_width, render_height);
+    }
+
+    if (!created && !this->virtual_display) {
       return false;
     }
 
@@ -390,7 +421,10 @@ namespace proc {
     launch_session.width = render_width;
     launch_session.height = render_height;
 
-    display_device::configure_display(config::video, launch_session);
+    // Same as execute: without a device id the display configuration would not reach this display.
+    if (created) {
+      display_device::configure_display(config::video, launch_session);
+    }
 
     // We should not preserve display state when using virtual display.
     // It is already handled by Windows properly.
