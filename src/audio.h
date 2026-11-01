@@ -80,6 +80,20 @@ namespace audio {
   void capture(safe::mail_t mail, config_t config, void *channel_data);
 
   /**
+   * @brief Check client supplied Opus multistream counts: Opus rejects coupled > streams.
+   */
+  inline bool valid_stream_counts(int streams, int coupled) {
+    return streams >= 1 && coupled >= 0 && coupled <= streams;
+  }
+
+  /**
+   * @brief Check client supplied audio packet duration in ms (Opus frame sizes the clients use).
+   */
+  inline bool valid_packet_duration(int ms) {
+    return ms == 5 || ms == 10 || ms == 20;
+  }
+
+  /**
    * @brief Get the reference to the audio context.
    * @returns A shared pointer reference to audio context.
    * @note Aside from the configuration purposes, it can be used to extend the
