@@ -1192,8 +1192,9 @@ namespace video {
     if (!disp) {
       // Get all the monitor names now, rather than at boot, to
       // get the most up-to-date list available monitors
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
-      disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
+      // reset_display() will sleep between retries, as the wanted display may still be settling
+      reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
       if (disp) {
         // A virtual display session keeps its wanted name, so a fallback can't replace it at the next reinit
         if (!proc::proc.virtual_display) {
@@ -1205,6 +1206,9 @@ namespace video {
     }
 
     display_wp = disp;
+
+    // A hotkey switch away from the virtual display, kept here because proc.display_name must keep naming it for resume
+    std::string switched_display_name;
 
     constexpr auto capture_buffer_size = 12;
     std::list<std::shared_ptr<platf::img_t>> imgs(capture_buffer_size);
@@ -1388,11 +1392,13 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
+              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, switched_display_name.empty() ? proc::proc.display_name : switched_display_name);
 
               // Process any pending display switch with the new list of displays
+              bool switched = false;
               if (switch_display_event->peek()) {
                 display_p = std::clamp(*switch_display_event->pop(), 0, (int) display_names.size() - 1);
+                switched = true;
               }
 
               // reset_display() will sleep between retries
@@ -1401,6 +1407,8 @@ namespace video {
                 // A virtual display session keeps its wanted name, so a fallback can't replace it at the next reinit
                 if (!proc::proc.virtual_display) {
                   proc::proc.display_name = display_names[display_p];
+                } else if (switched) {
+                  switched_display_name = display_names[display_p];
                 }
                 break;
               }
