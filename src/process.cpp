@@ -162,13 +162,242 @@ namespace proc {
     return cmd_path.parent_path();
   }
 
-  bool proc_t::resume_virtual_display() {
+  std::pair<uint32_t, uint32_t> render_size(int width, int height, int scale_factor) {
+    uint32_t render_width = width ? width : 1920;
+    uint32_t render_height = height ? height : 1080;
+
+    if (scale_factor != 100) {
+      render_width *= ((float)scale_factor / 100);
+      render_height *= ((float)scale_factor / 100);
+
+      // Chop the last bit to ensure the scaled resolution is even numbered
+      // Most odd resolutions won't work well
+      render_width &= ~1;
+      render_height &= ~1;
+    }
+
+    return {render_width, render_height};
+  }
+
+#ifdef _WIN32
+  bool proc_t::create_virtual_display(const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session, uint32_t render_width, uint32_t render_height) {
+    if (vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+      // Try init driver again
+      initVDisplayDriver();
+    }
+
+    if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
+      // Try set the render adapter matching the capture adapter if user has specified one
+      if (!config::video.adapter_name.empty()) {
+        if (!VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name))) {
+          BOOST_LOG(warning) << "Failed to set virtual display render adapter to " << config::video.adapter_name;
+        }
+      }
+
+      std::string device_name;
+      std::string device_uuid_str;
+      uuid_util::uuid_t device_uuid;
+
+      if (_app.use_app_identity) {
+        device_name = _app.name;
+        if (_app.per_client_app_identity) {
+          device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
+          auto app_uuid = uuid_util::uuid_t::parse(_app.uuid);
+
+          // Use XOR to mix the two UUIDs
+          device_uuid.b64[0] ^= app_uuid.b64[0];
+          device_uuid.b64[1] ^= app_uuid.b64[1];
+
+          device_uuid_str = device_uuid.string();
+        } else {
+          device_uuid_str = _app.uuid;
+          device_uuid = uuid_util::uuid_t::parse(_app.uuid);
+        }
+      } else {
+        device_name = launch_session->device_name;
+        device_uuid_str = launch_session->unique_id;
+        device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
+      }
+
+      memcpy(&launch_session->display_guid, &device_uuid, sizeof(GUID));
+
+      int target_fps = launch_session->fps ? launch_session->fps : 60000;
+
+      if (target_fps < 1000) {
+        target_fps *= 1000;
+      }
+
+      if (config::video.double_refreshrate) {
+        target_fps *= 2;
+      }
+
+      std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
+        device_uuid_str.c_str(),
+        device_name.c_str(),
+        render_width,
+        render_height,
+        target_fps,
+        launch_session->display_guid
+      );
+
+      // No matter we get the display name or not, the virtual display might still be created.
+      // We need to track it properly to remove the display when the session terminates.
+      launch_session->virtual_display = true;
+
+      if (!vdisplayName.empty()) {
+        BOOST_LOG(info) << "Virtual Display created at " << vdisplayName;
+
+        // Don't change display settings when no params are given
+        if (launch_session->width && launch_session->height && launch_session->fps) {
+          // Apply display settings
+          VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
+        }
+
+        // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
+        if (config::video.isolated_virtual_display_option == true) {
+          // Apply the isolated display settings
+          VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
+        }
+
+        // Set virtual_display to true when everything went fine
+        this->virtual_display = true;
+        this->display_name = platf::to_utf8(vdisplayName);
+
+        // When using virtual display, we don't care which display user configured to use.
+        // So we always set output_name to the newly created virtual display as a workaround for
+        // empty name when probing graphics cards.
+
+        // The display device enumeration can lag behind the display creation, so retry while it is empty.
+        // Never fall back to the physical display: leave output_name as is when the id stays unknown.
+        const bool dd_enabled = config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::disabled;
+        auto device_id = display_device::map_display_name(this->display_name);
+        if (dd_enabled) {
+          for (auto delay = 20ms; device_id.empty() && delay <= 320ms; delay *= 2) {
+            std::this_thread::sleep_for(delay);
+            device_id = display_device::map_display_name(this->display_name);
+          }
+        }
+        if (!dd_enabled || !device_id.empty()) {
+          config::video.output_name = device_id;
+          return true;
+        } else {
+          BOOST_LOG(warning) << "Cannot resolve device id of virtual display " << this->display_name << ", leaving display configuration untouched!";
+        }
+      } else {
+        BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
+      }
+    } else {
+      // Driver isn't working so we don't need to track virtual display.
+      launch_session->virtual_display = false;
+    }
+
+    return false;
+  }
+
+  void proc_t::reset_hdr(bool enable_hdr, bool requested_vd) {
+    auto resetHDRThread = std::thread([this, enable_hdr, requested_vd]{
+      // Virtual display requested but not created: display_name is empty, never toggle HDR on a physical display.
+      if (requested_vd && !this->virtual_display) {
+        return;
+      }
+
+      // Windows doesn't seem to be able to set HDR correctly when a display is just connected / changed resolution,
+      // so we have tooggle HDR for the virtual display manually after a delay.
+      auto retryInterval = 200ms;
+      while (is_changing_settings_going_to_fail()) {
+        if (retryInterval > 2s) {
+          BOOST_LOG(warning) << "Restoring HDR settings failed due to retry timeout!";
+          return;
+        }
+        std::this_thread::sleep_for(retryInterval);
+        retryInterval *= 2;
+      }
+
+      retryInterval = 200ms;
+      while (this->display_name.empty()) {
+        if (retryInterval > 2s) {
+          BOOST_LOG(warning) << "Not getting current display in time! HDR will not be toggled.";
+          return;
+        }
+        std::this_thread::sleep_for(retryInterval);
+        retryInterval *= 2;
+      }
+
+      // We should have got the actual streaming display by now
+      std::string currentDisplay = this->display_name;
+      auto currentDisplayW = platf::from_utf8(currentDisplay);
+
+      initial_hdr = VDISPLAY::getDisplayHDRByName(currentDisplayW.c_str());
+
+      if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic) {
+        mode_changed_display = currentDisplay;
+
+        // Try turn off HDR whatever
+        // As we always have to apply the workaround by turining off HDR first
+        VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false);
+
+        if (enable_hdr) {
+          if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
+            BOOST_LOG(info) << "HDR enabled for display " << currentDisplay;
+          } else {
+            BOOST_LOG(info) << "HDR enable failed for display " << currentDisplay;
+          }
+        }
+      } else if (initial_hdr) {
+        if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false) && VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
+          BOOST_LOG(info) << "HDR toggled successfully for display " << currentDisplay;
+        } else {
+          BOOST_LOG(info) << "HDR toggle failed for display " << currentDisplay;
+        }
+      }
+    });
+
+    resetHDRThread.detach();
+  }
+#endif
+
+  bool proc_t::resume_virtual_display(rtsp_stream::launch_session_t &launch_session) {
 #ifdef _WIN32
     // display_device::map_display_name is empty when dd config is disabled, so ask the OS directly.
     LUID adapterId;
     uint32_t targetId;
-    // Fail open when the CCD API is inaccessible (e.g. locked desktop): display state is unknown, not lost.
-    return VDISPLAY::findDisplayIds(platf::from_utf8(display_name).c_str(), adapterId, targetId) || test_no_access_to_ccd_api();
+    const bool found = VDISPLAY::findDisplayIds(platf::from_utf8(display_name).c_str(), adapterId, targetId);
+
+    const auto [render_width, render_height] = render_size(launch_session.width, launch_session.height, _app.scale_factor != 100 ? _app.scale_factor : launch_session.scale_factor);
+    if (found && render_width == (uint32_t) _launch_session->width && render_height == (uint32_t) _launch_session->height) {
+      return true;
+    }
+
+    if (is_changing_settings_going_to_fail()) {
+      // Fail open when the CCD API is inaccessible (e.g. locked desktop): display state is unknown, not lost.
+      return found || test_no_access_to_ccd_api();
+    }
+
+    BOOST_LOG(info) << "Recreating virtual display for client mode " << render_width << 'x' << render_height;
+
+    // The driver holds a single client mode, so a new size or orientation needs a new display.
+    // The identity comes from _launch_session, so the GUID stays the same and Windows sees the same monitor.
+    _launch_session->fps = launch_session.fps;
+    VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
+    if (!create_virtual_display(_launch_session, render_width, render_height)) {
+      return false;
+    }
+
+    // Only a finished recreate records the size, so a failed one is retried on the next resume.
+    _launch_session->width = render_width;
+    _launch_session->height = render_height;
+    launch_session.width = render_width;
+    launch_session.height = render_height;
+
+    display_device::configure_display(config::video, launch_session);
+
+    // We should not preserve display state when using virtual display.
+    // It is already handled by Windows properly.
+    display_device::reset_persistence();
+
+    reset_hdr(launch_session.enable_hdr, true);
+
+    return true;
 #else
     return true;
 #endif
@@ -202,26 +431,12 @@ namespace proc {
     _launch_session = launch_session;
     allow_client_commands = app.allow_client_commands;
 
-    uint32_t client_width = launch_session->width ? launch_session->width : 1920;
-    uint32_t client_height = launch_session->height ? launch_session->height : 1080;
-
-    uint32_t render_width = client_width;
-    uint32_t render_height = client_height;
-
     int scale_factor = launch_session->scale_factor;
     if (_app.scale_factor != 100) {
       scale_factor = _app.scale_factor;
     }
 
-    if (scale_factor != 100) {
-      render_width *= ((float)scale_factor / 100);
-      render_height *= ((float)scale_factor / 100);
-
-      // Chop the last bit to ensure the scaled resolution is even numbered
-      // Most odd resolutions won't work well
-      render_width &= ~1;
-      render_height &= ~1;
-    }
+    const auto [render_width, render_height] = render_size(launch_session->width, launch_session->height, scale_factor);
 
     launch_session->width = render_width;
     launch_session->height = render_height;
@@ -254,115 +469,7 @@ namespace proc {
       || _app.virtual_display            // App is configured to use virtual display
       || !video::allow_encoder_probing() // No active display presents
     ) {
-      if (vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
-        // Try init driver again
-        initVDisplayDriver();
-      }
-
-      if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
-        // Try set the render adapter matching the capture adapter if user has specified one
-        if (!config::video.adapter_name.empty()) {
-          if (!VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name))) {
-            BOOST_LOG(warning) << "Failed to set virtual display render adapter to " << config::video.adapter_name;
-          }
-        }
-
-        std::string device_name;
-        std::string device_uuid_str;
-        uuid_util::uuid_t device_uuid;
-
-        if (_app.use_app_identity) {
-          device_name = _app.name;
-          if (_app.per_client_app_identity) {
-            device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
-            auto app_uuid = uuid_util::uuid_t::parse(_app.uuid);
-
-            // Use XOR to mix the two UUIDs
-            device_uuid.b64[0] ^= app_uuid.b64[0];
-            device_uuid.b64[1] ^= app_uuid.b64[1];
-
-            device_uuid_str = device_uuid.string();
-          } else {
-            device_uuid_str = _app.uuid;
-            device_uuid = uuid_util::uuid_t::parse(_app.uuid);
-          }
-        } else {
-          device_name = launch_session->device_name;
-          device_uuid_str = launch_session->unique_id;
-          device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
-        }
-
-        memcpy(&launch_session->display_guid, &device_uuid, sizeof(GUID));
-
-        int target_fps = launch_session->fps ? launch_session->fps : 60000;
-
-        if (target_fps < 1000) {
-          target_fps *= 1000;
-        }
-
-        if (config::video.double_refreshrate) {
-          target_fps *= 2;
-        }
-
-        std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
-          device_uuid_str.c_str(),
-          device_name.c_str(),
-          render_width,
-          render_height,
-          target_fps,
-          launch_session->display_guid
-        );
-
-        // No matter we get the display name or not, the virtual display might still be created.
-        // We need to track it properly to remove the display when the session terminates.
-        launch_session->virtual_display = true;
-
-        if (!vdisplayName.empty()) {
-          BOOST_LOG(info) << "Virtual Display created at " << vdisplayName;
-
-          // Don't change display settings when no params are given
-          if (launch_session->width && launch_session->height && launch_session->fps) {
-            // Apply display settings
-            VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
-          }
-
-          // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
-          if (config::video.isolated_virtual_display_option == true) {
-            // Apply the isolated display settings
-            VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
-          }
-
-          // Set virtual_display to true when everything went fine
-          this->virtual_display = true;
-          this->display_name = platf::to_utf8(vdisplayName);
-
-          // When using virtual display, we don't care which display user configured to use.
-          // So we always set output_name to the newly created virtual display as a workaround for
-          // empty name when probing graphics cards.
-
-          // The display device enumeration can lag behind the display creation, so retry while it is empty.
-          // Never fall back to the physical display: leave output_name as is when the id stays unknown.
-          const bool dd_enabled = config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::disabled;
-          auto device_id = display_device::map_display_name(this->display_name);
-          if (dd_enabled) {
-            for (auto delay = 20ms; device_id.empty() && delay <= 320ms; delay *= 2) {
-              std::this_thread::sleep_for(delay);
-              device_id = display_device::map_display_name(this->display_name);
-            }
-          }
-          if (!dd_enabled || !device_id.empty()) {
-            config::video.output_name = device_id;
-          } else {
-            vd_name_lost = true;
-            BOOST_LOG(warning) << "Cannot resolve device id of virtual display " << this->display_name << ", leaving display configuration untouched!";
-          }
-        } else {
-          BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
-        }
-      } else {
-        // Driver isn't working so we don't need to track virtual display.
-        launch_session->virtual_display = false;
-      }
+      vd_name_lost = !create_virtual_display(launch_session, render_width, render_height) && this->virtual_display;
     }
 
     if (!vd_name_lost) {
@@ -529,64 +636,7 @@ namespace proc {
     _app_launch_time = std::chrono::steady_clock::now();
 
   #ifdef _WIN32
-    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr, requested_vd = launch_session->virtual_display]{
-      // Virtual display requested but not created: display_name is empty, never toggle HDR on a physical display.
-      if (requested_vd && !this->virtual_display) {
-        return;
-      }
-
-      // Windows doesn't seem to be able to set HDR correctly when a display is just connected / changed resolution,
-      // so we have tooggle HDR for the virtual display manually after a delay.
-      auto retryInterval = 200ms;
-      while (is_changing_settings_going_to_fail()) {
-        if (retryInterval > 2s) {
-          BOOST_LOG(warning) << "Restoring HDR settings failed due to retry timeout!";
-          return;
-        }
-        std::this_thread::sleep_for(retryInterval);
-        retryInterval *= 2;
-      }
-
-      retryInterval = 200ms;
-      while (this->display_name.empty()) {
-        if (retryInterval > 2s) {
-          BOOST_LOG(warning) << "Not getting current display in time! HDR will not be toggled.";
-          return;
-        }
-        std::this_thread::sleep_for(retryInterval);
-        retryInterval *= 2;
-      }
-
-      // We should have got the actual streaming display by now
-      std::string currentDisplay = this->display_name;
-      auto currentDisplayW = platf::from_utf8(currentDisplay);
-
-      initial_hdr = VDISPLAY::getDisplayHDRByName(currentDisplayW.c_str());
-
-      if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic) {
-        mode_changed_display = currentDisplay;
-
-        // Try turn off HDR whatever
-        // As we always have to apply the workaround by turining off HDR first
-        VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false);
-
-        if (enable_hdr) {
-          if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
-            BOOST_LOG(info) << "HDR enabled for display " << currentDisplay;
-          } else {
-            BOOST_LOG(info) << "HDR enable failed for display " << currentDisplay;
-          }
-        }
-      } else if (initial_hdr) {
-        if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false) && VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
-          BOOST_LOG(info) << "HDR toggled successfully for display " << currentDisplay;
-        } else {
-          BOOST_LOG(info) << "HDR toggle failed for display " << currentDisplay;
-        }
-      }
-    });
-
-    resetHDRThread.detach();
+    reset_hdr(launch_session->enable_hdr, launch_session->virtual_display);
   #endif
 
     fg.disable();

@@ -1463,7 +1463,7 @@ namespace nvhttp {
           launch_session->input_only = true;
         }
 
-        if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display()) {
+        if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display(*launch_session)) {
           BOOST_LOG(warning) << "Virtual display is gone, terminating app so the client relaunches"sv;
           if (!!(named_cert_p->perm & PERM::launch)) {
             proc::proc.terminate();
@@ -1602,7 +1602,7 @@ namespace nvhttp {
       launch_session->input_only = true;
     }
 
-      if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display()) {
+      if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display(*launch_session)) {
         BOOST_LOG(warning) << "Virtual display is gone, terminating app so the client relaunches"sv;
         if (!!(named_cert_p->perm & PERM::launch)) {
           proc::proc.terminate();
