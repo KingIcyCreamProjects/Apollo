@@ -226,11 +226,40 @@ launchctl load -w /Library/LaunchAgents/org.freedesktop.dbus-session.plist
 Verify that you've installed [Nefarius Virtual Gamepad](https://github.com/nefarius/ViGEmBus/releases/latest).
 
 ### Permission denied
-Since Sunshine runs as a service on Windows, it may not have the same level of access that your regular user account
+Since Apollo runs as a service on Windows, it may not have the same level of access that your regular user account
 has. You may get permission denied errors when attempting to launch a game or application from a non-system drive.
 
 You will need to modify the security permissions on your disk. Ensure that user/principal SYSTEM has full
 permissions on the disk.
+
+### Controller not detected after installing ViGEmBus
+Reinstall [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases/latest), then restart the Apollo service.
+
+### Tailscale
+- Add the host in Moonlight by its Tailscale IP address, since automatic discovery does not cross the tunnel.
+- Apollo binds to all addresses by default, so no extra bind setting is needed.
+- The Tailscale range `100.64.0.0/10` is treated as LAN, so the Web UI and the LAN encryption mode apply to it.
+
+### Reaching the Windows login screen remotely
+Apollo must run as the `ApolloService` Windows service. The service starts Apollo in the console session before any
+user logs in, so a stream can show the login screen.
+
+- The first login needs a working display. Set the virtual display as the primary display, or only as the display used
+  during a stream.
+- To remove the virtual display afterwards, terminate the stream. Disconnecting leaves it in place.
+
+### Adapter Name on a host with an integrated GPU
+On a host with a discrete and an integrated GPU, set `adapter_name` to the discrete GPU name so that capture and the
+virtual display use the same GPU as the encoder. Run `%ProgramFiles%\Apollo\tools\dxgi-info.exe` to list the names.
+
+### Built-in Virtual Display app
+The built-in Virtual Display app does not run global prep commands, detached commands or client commands. This is
+deliberate, so a failing command cannot block the fallback display. To get them, add your own app with
+**Always create virtual display** turned on, and use it instead.
+
+### Log files
+Apollo writes `sunshine.log` in the config folder, `%ProgramFiles%\Apollo\config`. Starting Apollo again moves the
+previous log to `sunshine.log.backup` and replaces any older backup, so copy it first if you need to keep it.
 
 ### Stuttering
 If you experience stuttering using NVIDIA, try disabling `vsync:fast` in the NVIDIA Control Panel.

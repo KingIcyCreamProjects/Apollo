@@ -167,7 +167,9 @@ namespace net {
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
 
     // Enable opportunistic QoS tagging (automatically disables if the network appears to drop tagged packets)
-    enet_socket_set_option(host->socket, ENET_SOCKOPT_QOS, 1);
+    if (host) {
+      enet_socket_set_option(host->socket, ENET_SOCKOPT_QOS, 1);
+    }
 
     return host;
   }
@@ -199,7 +201,7 @@ namespace net {
   /**
    * @brief Returns a string for use as the instance name for mDNS.
    * @param hostname The hostname to use for instance name generation.
-   * @return Hostname-based instance name or "Sunshine" if hostname is invalid.
+   * @return Hostname-based instance name or "Apollo" if hostname is invalid.
    */
   std::string mdns_instance_name(const std::string_view &hostname) {
     // Start with the unmodified hostname
