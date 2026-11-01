@@ -5,7 +5,9 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
 #include <functional>
+#include <span>
 
 // local includes
 #include "platform/common.h"
@@ -46,4 +48,15 @@ namespace input {
    * @return The major and minor axis pair.
    */
   std::pair<float, float> scale_client_contact_area(const std::pair<float, float> &val, uint16_t rotation, const std::pair<float, float> &scalar);
+
+#ifdef SUNSHINE_TESTS
+  namespace testing {
+    /**
+     * @brief Validate raw protocol input bytes for a unit test.
+     * @param packet Raw packet bytes.
+     * @return True when the packet is safe for typed processing.
+     */
+    bool is_valid_input_packet(std::span<const std::uint8_t> packet);
+  }  // namespace testing
+#endif
 }  // namespace input

@@ -1013,11 +1013,13 @@ namespace stream {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
       if (payload.size() < sizeof(int32_t)) {
+        BOOST_LOG(warning) << "Dropping truncated IDX_INPUT_DATA packet"sv;
         return;
       }
 
       auto tagged_cipher_length = util::endian::big(*(int32_t *) payload.data());
-      if (tagged_cipher_length < 0 || (size_t) tagged_cipher_length > payload.size() - sizeof(tagged_cipher_length)) {
+      if (tagged_cipher_length < (int32_t) crypto::cipher::tag_size || (size_t) tagged_cipher_length > payload.size() - sizeof(tagged_cipher_length)) {
+        BOOST_LOG(warning) << "Dropping IDX_INPUT_DATA packet with bad cipher length"sv;
         return;
       }
 
@@ -1157,8 +1159,7 @@ namespace stream {
       }
 
       if (plaintext.size() < 4) {
-        BOOST_LOG(error) << "Bad packet: decrypted control message too short"sv;
-        session::stop(*session);
+        BOOST_LOG(warning) << "Dropping truncated encrypted control packet"sv;
         return;
       }
 
