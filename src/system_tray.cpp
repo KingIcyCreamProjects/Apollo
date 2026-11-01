@@ -316,35 +316,6 @@ namespace system_tray {
     tray_update(&tray);
   }
 
-  void
-  update_tray_launch_error(std::string app_name, int exit_code) {
-    if (!tray_initialized) {
-      return;
-    }
-
-    tray.notification_title = NULL;
-    tray.notification_text = NULL;
-    tray.notification_cb = NULL;
-    tray.notification_icon = NULL;
-    tray.icon = TRAY_ICON;
-    tray_update(&tray);
-    char msg[256];
-    snprintf(msg, std::size(msg), "Application %s exited too fast with code %d. Click here to terminate the stream.", app_name.c_str(), exit_code);
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
-    tray.icon = TRAY_ICON;
-    tray.notification_icon = TRAY_ICON;
-    tray.notification_title = "Launch Error";
-    tray.notification_text = msg;
-    tray.notification_cb = []() {
-      BOOST_LOG(info) << "Force stop from notification"sv;
-      proc::proc.terminate();
-    };
-    tray.tooltip = PROJECT_NAME;
-    tray_update(&tray);
-  }
-
   void update_tray_require_pin() {
     if (!tray_initialized) {
       return;
