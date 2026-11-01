@@ -131,3 +131,9 @@ TEST(InputPacketValidationTest, PreservesUnknownPacketHandlingWithinDeclaredBoun
   const auto packet = make_input_packet(unknown_magic, sizeof(std::uint32_t), sizeof(NV_INPUT_HEADER));
   EXPECT_TRUE(input::testing::is_valid_input_packet(packet));
 }
+
+TEST(InputPacketValidationTest, PassthroughDropsEmptyPacketBeforePermissionFilter) {
+  auto stream_input = input::alloc(std::make_shared<safe::mail_raw_t>());
+  input::passthrough(stream_input, std::vector<std::uint8_t> {}, crypto::PERM::input_mouse);
+  SUCCEED();
+}

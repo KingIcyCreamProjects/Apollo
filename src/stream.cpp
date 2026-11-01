@@ -984,7 +984,7 @@ namespace stream {
       }
 
       auto tagged_cipher_length = util::endian::big(*(int32_t *) payload.data());
-      if (tagged_cipher_length < 0 || (size_t) tagged_cipher_length > payload.size() - sizeof(tagged_cipher_length)) {
+      if (tagged_cipher_length < (int32_t) crypto::cipher::tag_size || (size_t) tagged_cipher_length > payload.size() - sizeof(tagged_cipher_length)) {
         BOOST_LOG(warning) << "Dropping IDX_INPUT_DATA packet with bad cipher length"sv;
         return;
       }
