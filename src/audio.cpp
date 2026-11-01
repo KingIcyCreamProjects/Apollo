@@ -195,13 +195,22 @@ namespace audio {
       ref->restore_sink = ref->sink.host != *sink;
       if (ref->restore_sink) {
         if (control->set_sink(*sink)) {
+          // Let a later session retry the sink change
+          ref->sink_flag->store(false);
           return;
         }
       }
     }
 
     auto frame_size = config.packetDuration * stream.sampleRate / 1000;
-    auto mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+    std::unique_ptr<platf::mic_t> mic;
+    do {
+      mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+      if (!mic) {
+        BOOST_LOG(warning) << "Couldn't initialize audio input"sv;
+      }
+    } while (!mic && !shutdown_event->view(5s));
+
     if (!mic) {
       return;
     }
