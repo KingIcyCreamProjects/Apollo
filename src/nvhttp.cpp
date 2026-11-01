@@ -894,6 +894,8 @@ namespace nvhttp {
       }
     }
 
+    expire_pair_sessions_unlocked(std::chrono::steady_clock::now());
+
     auto sess_it = map_id_sess.find(uniqID);
     if (sess_it == std::end(map_id_sess)) {
       tree.put("root.<xmlattr>.status_code", 400);
