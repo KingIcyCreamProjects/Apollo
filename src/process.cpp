@@ -609,13 +609,6 @@ namespace proc {
       BOOST_LOG(info) << "App exited with code ["sv << _process.native_exit_code() << "] within 5 seconds of launch. Treating the app as a detached command."sv;
       BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
       placebo = true;
-
-    #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-      if (_process.native_exit_code() != 0) {
-        system_tray::update_tray_launch_error(proc::proc.get_last_run_app_name(), _process.native_exit_code());
-      }
-    #endif
-
       return _app_id;
     }
 
