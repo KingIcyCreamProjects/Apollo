@@ -362,19 +362,24 @@ namespace nvhttp {
     // Import from the new format.
     if (root.contains("named_devices")) {
       for (auto &el : root["named_devices"]) {
-        auto named_cert_p = std::make_shared<crypto::named_cert_t>();
-        named_cert_p->name = el.value("name", "");
-        named_cert_p->cert = el.value("cert", "");
-        named_cert_p->uuid = el.value("uuid", "");
-        named_cert_p->display_mode = el.value("display_mode", "");
-        named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
-        named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
-        named_cert_p->allow_client_commands = el.value("allow_client_commands", true);
-        named_cert_p->always_use_virtual_display = el.value("always_use_virtual_display", false);
-        // Load command entries for "do" and "undo" keys.
-        named_cert_p->do_cmds = extract_command_entries(el, "do");
-        named_cert_p->undo_cmds = extract_command_entries(el, "undo");
-        client.named_devices.emplace_back(named_cert_p);
+        // A malformed entry is skipped, so that client is not trusted. load_state runs on a bare thread, an uncaught throw would terminate.
+        try {
+          auto named_cert_p = std::make_shared<crypto::named_cert_t>();
+          named_cert_p->name = el.value("name", "");
+          named_cert_p->cert = el.value("cert", "");
+          named_cert_p->uuid = el.value("uuid", "");
+          named_cert_p->display_mode = el.value("display_mode", "");
+          named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
+          named_cert_p->enable_legacy_ordering = util::get_non_string_json_value<bool>(el, "enable_legacy_ordering", true);
+          named_cert_p->allow_client_commands = util::get_non_string_json_value<bool>(el, "allow_client_commands", true);
+          named_cert_p->always_use_virtual_display = util::get_non_string_json_value<bool>(el, "always_use_virtual_display", false);
+          // Load command entries for "do" and "undo" keys.
+          named_cert_p->do_cmds = extract_command_entries(el, "do");
+          named_cert_p->undo_cmds = extract_command_entries(el, "undo");
+          client.named_devices.emplace_back(named_cert_p);
+        } catch (std::exception &e) {
+          BOOST_LOG(error) << "Skipping malformed client in "sv << config::nvhttp.file_state << ": "sv << e.what();
+        }
       }
     }
 

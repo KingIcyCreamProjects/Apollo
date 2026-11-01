@@ -470,6 +470,8 @@ namespace util {
         return std::stod(s);
       } else if constexpr (std::is_same_v<T, bool>) {
         return s == "true";
+      } else if constexpr (std::is_same_v<T, uint32_t>) {
+        return static_cast<uint32_t>(std::stoul(s));
       } else if constexpr (std::is_same_v<T, std::string>) {
         return s;
       } else {

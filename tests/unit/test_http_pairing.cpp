@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 using namespace nvhttp;
@@ -677,4 +678,46 @@ TEST_F(ClientAuthStateTest, VerifyDuringStateReloads) {
   EXPECT_TRUE(trusted(PUBLIC_CERT));
   EXPECT_TRUE(trusted(other_cert()));
   EXPECT_EQ(get_all_clients().size(), 2u);
+}
+
+TEST_F(ClientAuthStateTest, LoadStateReadsStringifiedValues) {
+  nlohmann::json client = {
+    {"name", "phone"},
+    {"cert", other_cert()},
+    {"uuid", "u1"},
+    {"perm", "1"},
+    {"allow_client_commands", "false"},
+    {"enable_legacy_ordering", "true"},
+    {"always_use_virtual_display", "false"}
+  };
+  nlohmann::json tree = {{"root", {{"uniqueid", uuid_util::uuid_t::generate().string()}, {"named_devices", nlohmann::json::array({client})}}}};
+  std::ofstream(state_file) << tree.dump();
+
+  EXPECT_NO_THROW(load_state());
+
+  auto clients = get_all_clients();
+  ASSERT_EQ(clients.size(), 1u);
+  EXPECT_EQ(clients[0]["perm"].get<uint32_t>(), 1u);
+  EXPECT_FALSE(clients[0]["allow_client_commands"].get<bool>());
+}
+
+TEST_F(ClientAuthStateTest, LoadStateWithStringNamedDevicesLoadsNoClients) {
+  // The old ptree writer saved an empty array as a string
+  std::ofstream(state_file) << R"({"root": {"uniqueid": "id", "named_devices": ""}})";
+
+  EXPECT_NO_THROW(load_state());
+
+  EXPECT_TRUE(get_all_clients().empty());
+  EXPECT_FALSE(trusted(other_cert()));
+}
+
+TEST_F(ClientAuthStateTest, LoadStateSkipsClientWithBadPerm) {
+  nlohmann::json client = {{"name", "phone"}, {"cert", other_cert()}, {"uuid", "u1"}, {"perm", "abc"}};
+  nlohmann::json tree = {{"root", {{"uniqueid", uuid_util::uuid_t::generate().string()}, {"named_devices", nlohmann::json::array({client})}}}};
+  std::ofstream(state_file) << tree.dump();
+
+  EXPECT_NO_THROW(load_state());
+
+  EXPECT_TRUE(get_all_clients().empty());
+  EXPECT_FALSE(trusted(other_cert()));
 }
