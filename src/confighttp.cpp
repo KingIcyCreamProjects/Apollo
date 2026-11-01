@@ -72,7 +72,7 @@ namespace confighttp {
     BOOST_LOG(debug) << "METHOD :: "sv << request->method;
     BOOST_LOG(debug) << "DESTINATION :: "sv << request->path;
     for (auto &[name, val] : request->header) {
-      BOOST_LOG(debug) << name << " -- " << (name == "Authorization" ? "CREDENTIALS REDACTED" : val);
+      BOOST_LOG(debug) << name << " -- " << (name == "Authorization" || boost::iequals(name, "Cookie") ? "CREDENTIALS REDACTED" : val);
     }
     BOOST_LOG(debug) << " [--] "sv;
     for (auto &[name, val] : request->parse_query_string()) {
@@ -141,6 +141,13 @@ namespace confighttp {
   std::string getCookieValue(const std::string& cookieString, const std::string& key) {
     std::string keyWithEqual = key + "=";
     std::size_t startPos = cookieString.find(keyWithEqual);
+    // Only accept a hit at the start of a cookie, so "oauth=" does not match "auth".
+    while (startPos != std::string::npos && startPos > 0) {
+      auto prev = cookieString.find_last_not_of(' ', startPos - 1);
+      if (prev == std::string::npos || cookieString[prev] == ';')
+        break;
+      startPos = cookieString.find(keyWithEqual, startPos + 1);
+    }
     if (startPos == std::string::npos)
       return "";
     startPos += keyWithEqual.length();
@@ -439,6 +446,10 @@ namespace confighttp {
    * @param request The HTTP request object.
    */
   void getWelcomePage(resp_https_t response, req_https_t request) {
+    if (!checkIPOrigin(response, request)) {
+      return;
+    }
+
     print_req(request);
 
     if (!config::sunshine.username.empty()) {
@@ -1173,7 +1184,7 @@ namespace confighttp {
    * @api_examples{/api/password| POST| {"currentUsername":"admin","currentPassword":"admin","newUsername":"admin","newPassword":"admin","confirmNewPassword":"admin"}}
    */
   void savePassword(resp_https_t response, req_https_t request) {
-    if ((!config::sunshine.username.empty() && !authenticate(response, request)) || !validateContentType(response, request, "application/json"))
+    if (!checkIPOrigin(response, request) || (!config::sunshine.username.empty() && !authenticate(response, request)) || !validateContentType(response, request, "application/json"))
       return;
     print_req(request);
     std::vector<std::string> errors;
@@ -1198,10 +1209,13 @@ namespace confighttp {
           if (newPassword.empty() || newPassword != confirmPassword)
             errors.push_back("Password Mismatch");
           else {
-            http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword);
-            http::reload_user_creds(config::sunshine.credentials_file);
-            sessionCookie.clear(); // force re-login
-            output_tree["status"] = true;
+            if (http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword) != 0 ||
+                http::reload_user_creds(config::sunshine.credentials_file) != 0) {
+              errors.push_back("Failed to save credentials");
+            } else {
+              sessionCookie.clear(); // force re-login
+              output_tree["status"] = true;
+            }
           }
         } else {
           errors.push_back("Invalid Current Credentials");
@@ -1345,7 +1359,7 @@ namespace confighttp {
    * On Windows, if running in a service, a special shutdown code is returned.
    */
   void quit(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
       return;
     }
 
@@ -1488,7 +1502,7 @@ namespace confighttp {
       sessionCookie = util::hex(crypto::hash(sessionCookieRaw + config::sunshine.salt)).to_string();
       cookie_creation_time = std::chrono::steady_clock::now();
       const SimpleWeb::CaseInsensitiveMultimap headers {
-        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; SameSite=Strict; Max-Age=2592000; Path=/" }
+        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; HttpOnly; SameSite=Strict; Max-Age=2592000; Path=/" }
       };
       response->write(headers);
       fg.disable();

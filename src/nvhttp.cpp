@@ -281,8 +281,9 @@ namespace nvhttp {
     root["root"]["named_devices"] = named_cert_nodes;
 
     try {
-      std::ofstream out(config::nvhttp.file_state);
-      out << root.dump(4);  // Pretty-print with an indent of 4 spaces.
+      if (file_handler::write_file(config::nvhttp.file_state.c_str(), root.dump(4)) != 0) {  // Pretty-print with an indent of 4 spaces.
+        BOOST_LOG(error) << "Couldn't write "sv << config::nvhttp.file_state;
+      }
     } catch (std::exception &e) {
       BOOST_LOG(error) << "Couldn't write "sv << config::nvhttp.file_state << ": "sv << e.what();
       return;

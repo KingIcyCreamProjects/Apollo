@@ -86,8 +86,10 @@ namespace http {
     outputTree["salt"] = salt;
     outputTree["password"] = util::hex(crypto::hash(password + salt)).to_string();
     try {
-      std::ofstream out(file);
-      out << outputTree.dump(4);  // Pretty-print with an indent of 4 spaces.
+      if (file_handler::write_file(file.c_str(), outputTree.dump(4)) != 0) {  // Pretty-print with an indent of 4 spaces.
+        BOOST_LOG(error) << "error writing to the credentials file, perhaps try this again as an administrator?"sv;
+        return -1;
+      }
     } catch (std::exception &e) {
       BOOST_LOG(error) << "error writing to the credentials file, perhaps try this again as an administrator? Details: "sv << e.what();
       return -1;

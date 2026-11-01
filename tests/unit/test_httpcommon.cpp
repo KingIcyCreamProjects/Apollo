@@ -2,6 +2,10 @@
  * @file tests/unit/test_httpcommon.cpp
  * @brief Test src/httpcommon.*.
  */
+// standard includes
+#include <filesystem>
+#include <fstream>
+
 // test imports
 #include "../tests_common.h"
 
@@ -9,6 +13,7 @@
 #include <curl/curl.h>
 
 // local imports
+#include <src/file_handler.h>
 #include <src/httpcommon.h>
 
 struct UrlEscapeTest: testing::TestWithParam<std::tuple<std::string, std::string>> {};
@@ -71,3 +76,18 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(URL_2, "hello-redirect.txt")
   )
 );
+
+TEST(SaveUserCredsTest, WriteFailureReportedAndOldFileKept) {
+  const auto dir = std::filesystem::temp_directory_path() / "apollo_creds_test";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto file = (dir / "creds.json").string();
+  {
+    std::ofstream(file) << "{}";
+  }
+  // A directory in the temp file's place makes the atomic write fail.
+  std::filesystem::create_directories(file + ".tmp");
+  EXPECT_EQ(http::save_user_creds(file, "u", "p"), -1);
+  EXPECT_EQ(file_handler::read_file(file.c_str()), "{}");
+  std::filesystem::remove_all(dir);
+}

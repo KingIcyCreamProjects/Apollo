@@ -6,6 +6,7 @@
 // standard includes
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
 // local includes
 #include "file_handler.h"
@@ -43,13 +44,37 @@ namespace file_handler {
   }
 
   int write_file(const char *path, const std::string_view &contents) {
-    std::ofstream out(path);
+    // Write to a temp file and rename over the target so a failed write cannot truncate it.
+    // Callers on different threads share the fixed .tmp name, so serialize them.
+    static std::mutex write_mutex;
+    std::lock_guard lg {write_mutex};
 
-    if (!out.is_open()) {
-      return -1;
+    std::filesystem::path target {path};
+    auto tmp = target;
+    tmp += ".tmp";
+
+    {
+      std::ofstream out(tmp, std::ios::binary);
+      if (!out.is_open()) {
+        return -1;
+      }
+
+      out << contents;
+      out.flush();
+      if (!out) {
+        out.close();
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+        return -1;
+      }
     }
 
-    out << contents;
+    std::error_code ec;
+    std::filesystem::rename(tmp, target, ec);
+    if (ec) {
+      std::filesystem::remove(tmp, ec);
+      return -1;
+    }
 
     return 0;
   }
