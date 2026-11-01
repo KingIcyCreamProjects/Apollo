@@ -429,7 +429,7 @@ namespace platf::dxgi {
   }
 
   int display_base_t::init(const ::video::config_t &config, const std::string &display_name) {
-    std::once_flag windows_cpp_once_flag;
+    static std::once_flag windows_cpp_once_flag;
 
     std::call_once(windows_cpp_once_flag, []() {
       DECLARE_HANDLE(DPI_AWARENESS_CONTEXT);
@@ -599,7 +599,7 @@ namespace platf::dxgi {
     {
       const DWORD flags = TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY;
       TOKEN_PRIVILEGES tp;
-      HANDLE token;
+      HANDLE token = nullptr;
       LUID val;
 
       if (OpenProcessToken(GetCurrentProcess(), flags, &token) &&
@@ -613,7 +613,9 @@ namespace platf::dxgi {
         }
       }
 
-      CloseHandle(token);
+      if (token) {
+        CloseHandle(token);
+      }
 
       HMODULE gdi32 = GetModuleHandleA("GDI32");
       if (gdi32) {
@@ -1051,8 +1053,9 @@ namespace platf {
       return {};
     }
 
-    dxgi::adapter_t adapter;
-    for (int x = 0; factory->EnumAdapters1(x, &adapter) != DXGI_ERROR_NOT_FOUND; ++x) {
+    dxgi::adapter_t::pointer adapter_p {};
+    for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+      dxgi::adapter_t adapter {adapter_p};
       DXGI_ADAPTER_DESC1 adapter_desc;
       adapter->GetDesc1(&adapter_desc);
 
