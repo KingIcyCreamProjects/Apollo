@@ -198,8 +198,11 @@ namespace system_tray {
 
     // Wait for the shell to be initialized before registering the tray icon.
     // This ensures the tray icon works reliably after a logoff/logon cycle.
-    while (GetShellWindow() == nullptr) {
+    while (GetShellWindow() == nullptr && !tray_thread_should_exit) {
       Sleep(1000);
+    }
+    if (tray_thread_should_exit) {
+      return 1;
     }
   #endif
 
@@ -471,11 +474,9 @@ namespace system_tray {
 
         // Timeout after 10 seconds
         if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
-          BOOST_LOG(error) << "Tray thread initialization timeout"sv;
-          tray_thread_should_exit = true;
-          if (tray_thread.joinable()) {
-            tray_thread.join();
-          }
+          // The worker may still be waiting for the shell (e.g. boot before login).
+          // Leave it running so the icon appears once the shell is up; end_tray_threaded() stops it.
+          BOOST_LOG(info) << "Tray thread is waiting for the shell, continuing without blocking"sv;
           return 1;
         }
       }
@@ -497,7 +498,7 @@ namespace system_tray {
   }
 
   int end_tray_threaded() {
-    if (!tray_thread_running) {
+    if (!tray_thread.joinable()) {
       return 0;
     }
 
