@@ -367,7 +367,9 @@ int main(int argc, char *argv[]) {
       BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
 
       if (!config::video.adapter_name.empty()) {
-        VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
+        if (!VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name))) {
+          BOOST_LOG(warning) << "Failed to set virtual display render adapter to " << config::video.adapter_name;
+        }
       }
 
       VDISPLAY::createVirtualDisplay(

@@ -250,7 +250,9 @@ namespace proc {
       if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
         // Try set the render adapter matching the capture adapter if user has specified one
         if (!config::video.adapter_name.empty()) {
-          VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
+          if (!VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name))) {
+            BOOST_LOG(warning) << "Failed to set virtual display render adapter to " << config::video.adapter_name;
+          }
         }
 
         std::string device_name;

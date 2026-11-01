@@ -648,7 +648,6 @@ bool setRenderAdapterByName(const std::wstring& adapterName) {
 		}
 	}
 
-	printf("[SUDOVDA] Failed to set render adapter to the configured adapter_name.\n");
 	return false;
 }
 
