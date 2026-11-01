@@ -152,6 +152,10 @@ namespace nvhttp {
   // The HTTP and HTTPS servers and the web UI thread all reach the sessions and the OTP state
   std::mutex map_id_sess_mutex;
   client_t client_root;
+  // The same threads reach client_root and cert_chain. Entry points lock, save_state and load_state do not.
+  // Lock order: map_id_sess_mutex, then client_auth_mutex.
+  // ponytail: coarse lock, split if contention shows.
+  static std::mutex client_auth_mutex;
   std::atomic<uint32_t> session_id_counter;
 
   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SunshineHTTPS>::Response>;
@@ -206,7 +210,7 @@ namespace nvhttp {
     return commands;
   }
 
-  void save_state() {
+  bool save_state() {
     nlohmann::json root = nlohmann::json::object();
     // If the state file exists, try to read it.
     if (fs::exists(config::nvhttp.file_state)) {
@@ -215,7 +219,7 @@ namespace nvhttp {
         in >> root;
       } catch (std::exception &e) {
         BOOST_LOG(error) << "Couldn't read "sv << config::nvhttp.file_state << ": "sv << e.what();
-        return;
+        return false;
       }
     }
 
@@ -283,10 +287,20 @@ namespace nvhttp {
     try {
       if (file_handler::write_file(config::nvhttp.file_state.c_str(), root.dump(4)) != 0) {  // Pretty-print with an indent of 4 spaces.
         BOOST_LOG(error) << "Couldn't write "sv << config::nvhttp.file_state;
+        return false;
       }
     } catch (std::exception &e) {
       BOOST_LOG(error) << "Couldn't write "sv << config::nvhttp.file_state << ": "sv << e.what();
-      return;
+      return false;
+    }
+
+    return true;
+  }
+
+  static void rebuild_cert_chain() {
+    cert_chain.clear();
+    for (auto &named_cert : client_root.named_devices) {
+      cert_chain.add(named_cert);
     }
   }
 
@@ -303,6 +317,10 @@ namespace nvhttp {
       in >> tree;
     } catch (std::exception &e) {
       BOOST_LOG(error) << "Couldn't read "sv << config::nvhttp.file_state << ": "sv << e.what();
+      rebuild_cert_chain();
+      if (http::unique_id.empty()) {
+        http::unique_id = uuid_util::uuid_t::generate().string();
+      }
       return;
     }
 
@@ -360,16 +378,32 @@ namespace nvhttp {
       }
     }
 
+    client_root = client;
+
     // Clear any existing certificate chain and add the imported certificates.
-    cert_chain.clear();
-    for (auto &named_cert : client.named_devices) {
-      cert_chain.add(named_cert);
+    rebuild_cert_chain();
+  }
+
+  // The chain follows client_root whatever the file does. Only a file that was just written is reloaded:
+  // after a failed write it still holds the old clients, so reloading would trust a removed client again.
+  static bool sync_client_state() {
+    rebuild_cert_chain();
+    if (!save_state()) {
+      return false;
     }
 
-    client_root = client;
+    load_state();
+    return true;
+  }
+
+  const char *verify_client_cert(crypto::x509_t::element_type *cert, p_named_cert_t &named_cert_out) {
+    std::scoped_lock lock {client_auth_mutex};
+    return cert_chain.verify(cert, named_cert_out);
   }
 
   void add_authorized_client(const p_named_cert_t& named_cert_p) {
+    std::scoped_lock lock {client_auth_mutex};
+
     client_t &client = client_root;
     client.named_devices.push_back(named_cert_p);
 
@@ -378,8 +412,7 @@ namespace nvhttp {
 #endif
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
-      save_state();
-      load_state();
+      sync_client_state();
     }
   }
 
@@ -1135,6 +1168,8 @@ namespace nvhttp {
     client_t &client = client_root;
     std::list<std::string> connected_uuids = rtsp_stream::get_all_session_uuids();
 
+    std::scoped_lock lock {client_auth_mutex};
+
     for (auto &named_cert : client.named_devices) {
       nlohmann::json named_cert_node;
       named_cert_node["name"] = named_cert->name;
@@ -1805,7 +1840,7 @@ namespace nvhttp {
 
       });
 
-      auto err_str = cert_chain.verify(x509.get(), named_cert_p);
+      auto err_str = verify_client_cert(x509.get(), named_cert_p);
       if (err_str) {
         BOOST_LOG(warning) << "SSL Verification error :: "sv << err_str;
         return verified;
@@ -1905,11 +1940,11 @@ namespace nvhttp {
 
   void
   erase_all_clients() {
+    std::scoped_lock lock {client_auth_mutex};
+
     client_t client;
     client_root = client;
-    cert_chain.clear();
-    save_state();
-    load_state();
+    sync_client_state();
   }
 
   void stop_session(stream::session_t& session, bool graceful) {
@@ -1955,6 +1990,8 @@ namespace nvhttp {
   ) {
     find_and_udpate_session_info(uuid, name, newPerm);
 
+    std::scoped_lock lock {client_auth_mutex};
+
     client_t &client = client_root;
     auto it = client.named_devices.begin();
     for (; it != client.named_devices.end(); ++it) {
@@ -1978,30 +2015,37 @@ namespace nvhttp {
 
   bool unpair_client(const std::string_view uuid) {
     bool removed = false;
-    client_t &client = client_root;
-    for (auto it = client.named_devices.begin(); it != client.named_devices.end();) {
-      if ((*it)->uuid == uuid) {
-        it = client.named_devices.erase(it);
-        removed = true;
-      } else {
-        ++it;
+    bool saved = false;
+    bool no_clients_left = false;
+    {
+      std::scoped_lock lock {client_auth_mutex};
+
+      client_t &client = client_root;
+      for (auto it = client.named_devices.begin(); it != client.named_devices.end();) {
+        if ((*it)->uuid == uuid) {
+          it = client.named_devices.erase(it);
+          removed = true;
+        } else {
+          ++it;
+        }
       }
+
+      saved = sync_client_state();
+      no_clients_left = client.named_devices.empty();
     }
 
-    save_state();
-    load_state();
-
+    // Session teardown stays out of the lock
     if (removed) {
       auto session = rtsp_stream::find_session(uuid);
       if (session) {
         stop_session(*session, true);
       }
 
-      if (client.named_devices.empty()) {
+      if (no_clients_left) {
         proc::proc.terminate();
       }
     }
 
-    return removed;
+    return removed && saved;
   }
 }  // namespace nvhttp
