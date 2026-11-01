@@ -50,6 +50,27 @@ namespace video {
     bool input_only;
   };
 
+  /**
+   * @brief True when the client asks for far more frames than it wants encoded (warp), so frames must be paced.
+   */
+  bool encode_limiter_needed(const config_t &config);
+
+  /**
+   * @brief Paces captured frames to one per `interval`, snapping timestamps near a slot onto it.
+   */
+  struct encode_limiter_t {
+    std::chrono::steady_clock::time_point slot;
+    std::chrono::nanoseconds interval;
+    std::chrono::nanoseconds tolerance;
+
+    /**
+     * @brief Decide whether to encode a frame.
+     * @param ts Frame timestamp, rewritten to the slot when within tolerance.
+     * @return false if the frame arrived too early and must be dropped.
+     */
+    bool admit(std::chrono::steady_clock::time_point &ts);
+  };
+
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
   platf::pix_fmt_e map_pix_fmt(AVPixelFormat fmt);
 
