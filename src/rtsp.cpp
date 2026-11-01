@@ -1029,8 +1029,8 @@ namespace rtsp_stream {
         config.encryptionFlagsEnabled |= SS_ENC_AUDIO;
       }
 
-      config.monitor.height = util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
-      config.monitor.width = util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
+      config.monitor.height = util::from_view(args.at("x-nv-video[0].clientViewportHt"sv)) & ~1;
+      config.monitor.width = util::from_view(args.at("x-nv-video[0].clientViewportWd"sv)) & ~1;
       config.monitor.framerate = util::from_view(args.at("x-nv-video[0].maxFPS"sv));
       config.monitor.bitrate = util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
