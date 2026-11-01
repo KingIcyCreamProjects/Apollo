@@ -66,3 +66,19 @@ TEST_P(AudioTest, TestEncode) {
   timer.join();
   capture.join();
 }
+
+TEST(AudioParamTests, StreamCounts) {
+  EXPECT_FALSE(audio::valid_stream_counts(2, 4));
+  EXPECT_FALSE(audio::valid_stream_counts(0, 0));
+  EXPECT_TRUE(audio::valid_stream_counts(4, 2));
+  EXPECT_TRUE(audio::valid_stream_counts(6, 0));
+}
+
+TEST(AudioParamTests, PacketDuration) {
+  for (int ms : {0, 7, 100000, -5}) {
+    EXPECT_FALSE(audio::valid_packet_duration(ms)) << ms;
+  }
+  for (int ms : {5, 10, 20}) {
+    EXPECT_TRUE(audio::valid_packet_duration(ms)) << ms;
+  }
+}

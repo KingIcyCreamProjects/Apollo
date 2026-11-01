@@ -873,7 +873,13 @@ namespace rtsp_stream {
     seqn.content = const_cast<char *>(seqn_str.c_str());
 
     std::string_view target {req->message.request.target};
-    auto begin = std::find(std::begin(target), std::end(target), '=') + 1;
+    auto eq = std::find(std::begin(target), std::end(target), '=');
+    if (eq == std::end(target)) {
+      cmd_not_found(sock, session, std::move(req));
+
+      return;
+    }
+    auto begin = eq + 1;
     auto end = std::find(begin, std::end(target), '/');
     std::string_view type {begin, (size_t) std::distance(begin, end)};
 
@@ -963,7 +969,7 @@ namespace rtsp_stream {
         auto name = line.substr(2, pos - 2);
         auto val = line.substr(pos + 1);
 
-        if (val[val.size() - 1] == ' ') {
+        if (!val.empty() && val.back() == ' ') {
           val = val.substr(0, val.size() - 1);
         }
         args.emplace(name, val);
@@ -1022,6 +1028,13 @@ namespace rtsp_stream {
       config.monitor.dynamicRange = util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
       config.monitor.chromaSamplingType = util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
+
+      if (config.packetsize < 200 || config.packetsize > 65000 ||
+          !audio::valid_packet_duration(config.audio.packetDuration) ||
+          config.monitor.framerate <= 0 || (config::video.limit_framerate && session.fps <= 0)) {
+        respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return;
+      }
 
       if (config::video.limit_framerate) {
         config.monitor.encodingFramerate = session.fps;
@@ -1088,7 +1101,7 @@ namespace rtsp_stream {
       // Coupled streams
       std::uint8_t m = session.surround_params[2] - '0';
       auto valid = false;
-      if ((c == 6 || c == 8) && c == config.audio.channels && n + m == c && session.surround_params.length() == c + 3) {
+      if ((c == 6 || c == 8) && c == config.audio.channels && n + m == c && audio::valid_stream_counts(n, m) && session.surround_params.length() == c + 3) {
         config.audio.customStreamParams.channelCount = c;
         config.audio.customStreamParams.streams = n;
         config.audio.customStreamParams.coupledStreams = m;

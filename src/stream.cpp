@@ -4,9 +4,12 @@
  */
 
 // standard includes
+#include <cstring>
 #include <fstream>
 #include <future>
+#include <optional>
 #include <queue>
+#include <utility>
 
 // lib includes
 #include <boost/endian/arithmetic.hpp>
@@ -487,6 +490,29 @@ namespace stream {
 
   static auto broadcast = safe::make_shared<broadcast_ctx_t>(start_broadcast, end_broadcast);
 
+  /**
+   * @brief Parse a control message from an ENet packet.
+   *
+   * @param packet ENet packet containing the control message type and payload.
+   * @return The message type and payload view, or `std::nullopt` when the packet lacks a complete type.
+   */
+  std::optional<std::pair<std::uint16_t, std::string_view>> parse_control_packet(const ENetPacket &packet) {
+    if (packet.data == nullptr || packet.dataLength < sizeof(std::uint16_t)) {
+      return std::nullopt;
+    }
+
+    std::uint16_t type;
+    std::memcpy(&type, packet.data, sizeof(type));
+
+    return std::pair {
+      type,
+      std::string_view {
+        reinterpret_cast<const char *>(packet.data) + sizeof(type),
+        packet.dataLength - sizeof(type),
+      },
+    };
+  }
+
   session_t *control_server_t::get_session(const net::peer_t peer, uint32_t connect_data) {
     {
       // Fast path - look up existing session by peer
@@ -593,10 +619,10 @@ namespace stream {
           {
             net::packet_t packet {event.packet};
 
-            auto type = *(std::uint16_t *) packet->data;
-            std::string_view payload {(char *) packet->data + sizeof(type), packet->dataLength - sizeof(type)};
-
-            call(type, session, payload, false);
+            auto message = parse_control_packet(*packet);
+            if (message) {
+              call(message->first, session, message->second, false);
+            }
           }
           break;
         case ENET_EVENT_TYPE_CONNECT:
@@ -941,6 +967,10 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_LOSS_STATS], [&](session_t *session, const std::string_view &payload) {
+      if (payload.size() < 4 * sizeof(int32_t)) {
+        return;
+      }
+
       int32_t *stats = (int32_t *) payload.data();
       auto count = stats[0];
       std::chrono::milliseconds t {stats[1]};
@@ -963,6 +993,10 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
+      if (payload.size() < 2 * sizeof(std::int64_t)) {
+        return;
+      }
+
       auto frames = (std::int64_t *) payload.data();
       auto firstFrame = frames[0];
       auto lastFrame = frames[1];
@@ -978,7 +1012,15 @@ namespace stream {
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
+      if (payload.size() < sizeof(int32_t)) {
+        return;
+      }
+
       auto tagged_cipher_length = util::endian::big(*(int32_t *) payload.data());
+      if (tagged_cipher_length < 0 || (size_t) tagged_cipher_length > payload.size() - sizeof(tagged_cipher_length)) {
+        return;
+      }
+
       std::string_view tagged_cipher {payload.data() + sizeof(tagged_cipher_length), (size_t) tagged_cipher_length};
 
       std::vector<uint8_t> plaintext;
@@ -1009,6 +1051,10 @@ namespace stream {
         return;
       }
 
+      if (payload.empty()) {
+        return;
+      }
+
       uint8_t cmdIndex = *(uint8_t*)payload.data();
 
       if (cmdIndex < config::sunshine.server_cmds.size()) {
@@ -1035,7 +1081,7 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_SET_CLIPBOARD], [server](session_t *session, const std::string_view &payload) {
-      BOOST_LOG(info) << "type [IDX_SET_CLIPBOARD]: "sv << payload << " size: " << payload.size();
+      BOOST_LOG(info) << "type [IDX_SET_CLIPBOARD]: size: "sv << payload.size();
 
       if (!(session->permission & crypto::PERM::clipboard_set)) {
         BOOST_LOG(debug) << "Permission Clipboard Set deined for [" << session->device_name << "]";
@@ -1044,7 +1090,7 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_FILE_TRANSFER_NONCE_REQUEST], [server](session_t *session, const std::string_view &payload) {
-      BOOST_LOG(info) << "type [IDX_FILE_TRANSFER_NONCE_REQUEST]: "sv << payload << " size: " << payload.size();
+      BOOST_LOG(info) << "type [IDX_FILE_TRANSFER_NONCE_REQUEST]: size: "sv << payload.size();
 
       if (!(session->permission & crypto::PERM::file_upload)) {
         BOOST_LOG(debug) << "Permission File Upload deined for [" << session->device_name << "]";
@@ -1054,6 +1100,12 @@ namespace stream {
 
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_ENCRYPTED]"sv;
+
+      // The header overlaps the 2 byte type already stripped from payload
+      if (payload.size() + 2 < sizeof(control_encrypted_t)) {
+        BOOST_LOG(warning) << "Control: Runt packet"sv;
+        return;
+      }
 
       auto header = (control_encrypted_p) (payload.data() - 2);
 
@@ -1066,6 +1118,10 @@ namespace stream {
       }
 
       auto tagged_cipher_length = length - 4;
+      if (payload.size() + 2 - sizeof(control_encrypted_t) < (size_t) tagged_cipher_length) {
+        BOOST_LOG(warning) << "Control: Packet shorter than declared length"sv;
+        return;
+      }
       std::string_view tagged_cipher {(char *) header->payload(), (size_t) tagged_cipher_length};
 
       auto &cipher = session->control.cipher;
@@ -1096,6 +1152,12 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
+        session::stop(*session);
+        return;
+      }
+
+      if (plaintext.size() < 4) {
+        BOOST_LOG(error) << "Bad packet: decrypted control message too short"sv;
         session::stop(*session);
         return;
       }

@@ -103,6 +103,11 @@ namespace audio {
       nullptr
     )};
 
+    if (!opus) {
+      BOOST_LOG(error) << "Failed to create Opus encoder"sv;
+      return;
+    }
+
     opus_multistream_encoder_ctl(opus.get(), OPUS_SET_BITRATE(stream.bitrate));
     opus_multistream_encoder_ctl(opus.get(), OPUS_SET_VBR(0));
 
