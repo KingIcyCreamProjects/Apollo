@@ -7,6 +7,7 @@
 #include <format>
 #include <src/config.h>
 #include <src/display_device.h>
+#include <src/process.h>
 #include <src/rtsp.h>
 
 namespace {
@@ -296,11 +297,16 @@ TEST(DoubleRefreshRate, OnlyAppliedToVirtualDisplay) {
   rtsp_stream::launch_session_t session {};
   session.fps = 60000;
 
-  session.virtual_display = true;
+  proc::proc.virtual_display = true;
   auto result {display_device::parse_configuration(video_config, session)};
   EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {120, 1})));
 
-  session.virtual_display = false;
+  proc::proc.virtual_display = false;
+  result = display_device::parse_configuration(video_config, session);
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {60, 1})));
+
+  // Client requested a virtual display but none exists (resume, creation failed): physical display must not be doubled.
+  session.virtual_display = true;
   result = display_device::parse_configuration(video_config, session);
   EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {60, 1})));
 }
