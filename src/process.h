@@ -138,13 +138,24 @@ namespace proc {
     boost::process::v1::environment get_env();
     void resume();
     /**
+     * @brief Recreate the virtual display of the running app when it is gone or the client mode changed its size.
+     * A client without the launch permission only checks that the display still exists.
+     * @param launch_session The resuming session, its size is set to the scaled size when the display is recreated.
      * @return false if the virtual display of the running app no longer exists and the app cannot be resumed
      */
-    bool resume_virtual_display();
+    bool resume_virtual_display(rtsp_stream::launch_session_t &launch_session);
     void pause();
     void terminate(bool immediate = false, bool needs_refresh = true);
 
   private:
+#ifdef _WIN32
+    /**
+     * @return true if the virtual display was created and its device id is known
+     */
+    bool create_virtual_display(const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session, uint32_t render_width, uint32_t render_height);
+    void reset_hdr(bool enable_hdr, bool requested_vd);
+#endif
+
     int _app_id = 0;
     std::string _app_name;
 
@@ -176,6 +187,12 @@ namespace proc {
    * @return Tuple of id calculated without index (for use if no collision) and one with.
    */
   std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, std::string app_image_path, int index);
+
+  /**
+   * @brief Calculate the size of the virtual display for a client mode.
+   * @return The client size with the scale factor applied, even numbered when scaled.
+   */
+  std::pair<uint32_t, uint32_t> render_size(int width, int height, int scale_factor);
 
   std::string validate_app_image_path(std::string app_image_path);
   void refresh(const std::string &file_name, bool needs_terminate = true);
