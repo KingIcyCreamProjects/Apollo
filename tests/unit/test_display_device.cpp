@@ -311,6 +311,40 @@ TEST(DoubleRefreshRate, OnlyAppliedToVirtualDisplay) {
   EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {60, 1})));
 }
 
+TEST(DoubleRefreshRate, RemappingMatchesClientFps) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::verify_only;
+  video_config.dd.resolution_option = resolution_option_e::automatic;
+  video_config.dd.refresh_rate_option = refresh_rate_option_e::automatic;
+  video_config.double_refreshrate = true;
+
+  rtsp_stream::launch_session_t session {};
+  session.width = 1920;
+  session.height = 1080;
+  session.fps = 60000;
+  session.enable_sops = true;
+
+  proc::proc.virtual_display = true;
+
+  // Entry keyed on the client FPS matches, and its final refresh rate is used as written.
+  video_config.dd.mode_remapping.mixed = {{"", "60", "", "90"}};
+  auto result {display_device::parse_configuration(video_config, session)};
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {90, 1})));
+
+  // Matched entry without a final refresh rate leaves the doubled rate in place.
+  video_config.dd.mode_remapping.mixed = {{"", "60", "1024x720", ""}};
+  result = display_device::parse_configuration(video_config, session);
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_resolution, std::make_optional(resolution_t {1024, 720}));
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {120, 1})));
+
+  // Entry keyed on the doubled value is for a client asking for that FPS, not this one.
+  video_config.dd.mode_remapping.mixed = {{"", "120", "", "90"}};
+  result = display_device::parse_configuration(video_config, session);
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {120, 1})));
+
+  proc::proc.virtual_display = false;
+}
+
 namespace {
   using res_t = resolution_t;
   using fps_t = client_fps_t;
