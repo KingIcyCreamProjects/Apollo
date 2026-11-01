@@ -250,7 +250,9 @@ namespace proc {
       if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
         // Try set the render adapter matching the capture adapter if user has specified one
         if (!config::video.adapter_name.empty()) {
-          VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
+          if (!VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name))) {
+            BOOST_LOG(warning) << "Failed to set virtual display render adapter to " << config::video.adapter_name;
+          }
         }
 
         std::string device_name;
@@ -1592,15 +1594,19 @@ namespace proc {
     }
 
   #ifdef _WIN32
+    // Only the first start is worth retrying; a known failure must not stall terminate/cancel for seconds.
+    size_t max_tries = vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::UNKNOWN ? 5 : 1;
     size_t fail_count = 0;
-    while (fail_count < 5 && vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+    while (fail_count < max_tries && vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
       initVDisplayDriver();
       if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
         break;
       }
 
       fail_count += 1;
-      std::this_thread::sleep_for(1s);
+      if (fail_count < max_tries) {
+        std::this_thread::sleep_for(1s);
+      }
     }
   #endif
 

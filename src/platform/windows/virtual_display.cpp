@@ -601,11 +601,14 @@ bool startPingThread(std::function<void()> failCb) {
 				if (!sleepInterval) return;
 				if (!PingDriver(SUDOVDA_DRIVER_HANDLE)) {
 					fail_count += 1;
+					printf("[SUDOVDA] Driver ping failed (%d consecutive)\n", (int)fail_count);
 					if (fail_count > 3) {
 						failCb();
 						return;
 					}
-				};
+				} else {
+					fail_count = 0;
+				}
 				Sleep(sleepInterval);
 			}
 		});
