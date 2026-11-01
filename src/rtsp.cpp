@@ -14,6 +14,7 @@ extern "C" {
 #include <cctype>
 #include <format>
 #include <set>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -446,28 +447,32 @@ namespace rtsp_stream {
     }
 
     void handle_accept(const boost::system::error_code &ec) {
-      if (ec) {
-        BOOST_LOG(error) << "Couldn't accept incoming connections: "sv << ec.message();
-
-        // Stop server
-        clear();
+      if (ec == boost::asio::error::operation_aborted) {
+        // stop() cancelled the acceptor
         return;
       }
 
-      auto socket = std::move(next_socket);
-
-      auto launch_session {launch_event.view(0s)};
-      if (launch_session) {
-        // Associate the current RTSP session with this socket and start reading
-        socket->session = launch_session;
-        socket->read();
+      if (ec) {
+        // Transient accept errors (e.g. a client reset) must not take the RTSP server down.
+        // Back off briefly so a persistent error can't spin this thread, then re-arm below.
+        BOOST_LOG(error) << "Couldn't accept incoming connection: "sv << ec.message();
+        std::this_thread::sleep_for(100ms);
       } else {
-        // This can happen due to normal things like port scanning, so let's not make these visible by default
-        BOOST_LOG(debug) << "No pending session for incoming RTSP connection"sv;
+        auto socket = std::move(next_socket);
 
-        // If there is no session pending, close the connection immediately
-        boost::system::error_code ec;
-        socket->sock.close(ec);
+        auto launch_session {launch_event.view(0s)};
+        if (launch_session) {
+          // Associate the current RTSP session with this socket and start reading
+          socket->session = launch_session;
+          socket->read();
+        } else {
+          // This can happen due to normal things like port scanning, so let's not make these visible by default
+          BOOST_LOG(debug) << "No pending session for incoming RTSP connection"sv;
+
+          // If there is no session pending, close the connection immediately
+          boost::system::error_code close_ec;
+          socket->sock.close(close_ec);
+        }
       }
 
       // Queue another asynchronous accept for the next incoming connection
@@ -795,7 +800,14 @@ namespace rtsp_stream {
     uint32_t encryption_flags_requested = SS_ENC_CONTROL_V2;
 
     // Determine the encryption desired for this remote endpoint
-    auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
+    boost::system::error_code ec;
+    auto remote_endpoint = sock.remote_endpoint(ec);
+    if (ec) {
+      BOOST_LOG(warning) << "RTSP client disconnected before DESCRIBE: "sv << ec.message();
+      return;
+    }
+
+    auto encryption_mode = net::encryption_mode_for_address(remote_endpoint.address());
     if (encryption_mode != config::ENCRYPTION_MODE_NEVER) {
       // Advertise support for video encryption if it's not disabled
       encryption_flags_supported |= SS_ENC_VIDEO;
@@ -1160,7 +1172,14 @@ namespace rtsp_stream {
     }
 
     // Check that any required encryption is enabled
-    auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
+    boost::system::error_code ec;
+    auto remote_endpoint = sock.remote_endpoint(ec);
+    if (ec) {
+      BOOST_LOG(warning) << "RTSP client disconnected before ANNOUNCE completed: "sv << ec.message();
+      return;
+    }
+
+    auto encryption_mode = net::encryption_mode_for_address(remote_endpoint.address());
     if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
         (config.encryptionFlagsEnabled & (SS_ENC_VIDEO | SS_ENC_AUDIO)) != (SS_ENC_VIDEO | SS_ENC_AUDIO)) {
       BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
@@ -1172,7 +1191,7 @@ namespace rtsp_stream {
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
 
-    if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
+    if (stream::session::start(*stream_session, remote_endpoint.address().to_string())) {
       BOOST_LOG(error) << "Failed to start a streaming session"sv;
 
       server->remove(stream_session);
