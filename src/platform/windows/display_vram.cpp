@@ -1090,7 +1090,14 @@ namespace platf::dxgi {
       }
 
       base.apply_colorspace(colorspace);
-      return base.init_output(nvenc_d3d->get_input_texture(), client_config.width, client_config.height) == 0;
+      if (base.init_output(nvenc_d3d->get_input_texture(), client_config.width, client_config.height)) {
+        return false;
+      }
+
+      // The display is only read by init_output(). Don't keep it alive past this point, because
+      // a hung async teardown of this device would otherwise block capture reinit forever.
+      base.display.reset();
+      return true;
     }
 
     int convert(platf::img_t &img_base) override {

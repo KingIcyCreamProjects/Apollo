@@ -1087,7 +1087,7 @@ namespace video {
    */
   void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, std::string &preferred_display_name) {
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
-    const auto output_name { display_device::map_output_name(config::video.output_name) };
+    auto output_name { display_device::map_output_name(config::video.output_name) };
     std::string current_display_name = preferred_display_name;
 
     // If we have a current display index, let's start with that
@@ -1115,25 +1115,44 @@ namespace video {
       current_display_name = display_device::map_output_name(config::video.output_name);
     }
 
-    // If we had a name previously, let's try to find it in the new list
-    if (!current_display_name.empty()) {
+    const auto select_display = [&](const std::string &name) {
       for (int x = 0; x < display_names.size(); ++x) {
-        if (display_names[x] == current_display_name) {
+        if (display_names[x] == name) {
           current_display_index = x;
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // If we had a name previously, let's try to find it in the new list
+    if (!current_display_name.empty() && select_display(current_display_name)) {
+      return;
+    }
+
+    // A pinned output maps to an empty name while its device is inactive, so it gets the same wait
+    if (!current_display_name.empty() || !config::video.output_name.empty()) {
+      // The display may only be gone for a moment, like a virtual display during a lock or mode change
+      for (int attempt = 0; attempt < 10; ++attempt) {
+        std::this_thread::sleep_for(200ms);
+
+        // Keep the list we have if this enumeration finds nothing
+        if (auto new_display_names = platf::display_names(dev_type); !new_display_names.empty()) {
+          display_names = std::move(new_display_names);
+        }
+
+        output_name = display_device::map_output_name(config::video.output_name);
+        if (select_display(current_display_name.empty() ? output_name : current_display_name)) {
           return;
         }
       }
 
       // The old display was removed, so we'll start back at the first display again
-      BOOST_LOG(warning) << "Previous active display ["sv << current_display_name << "] is no longer present"sv;
-    } else {
-      for (int x = 0; x < display_names.size(); ++x) {
-        if (display_names[x] == output_name) {
-          current_display_index = x;
-          return;
-        }
-      }
+      BOOST_LOG(warning) << "Previous active display ["sv << (current_display_name.empty() ? config::video.output_name : current_display_name) << "] is no longer present"sv;
     }
+
+    // A pinned output still comes before the first display
+    select_display(output_name);
   }
 
   void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
@@ -1182,7 +1201,10 @@ namespace video {
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
       disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
       if (disp) {
-        proc::proc.display_name = display_names[display_p];
+        // A virtual display session keeps its wanted name, so a fallback can't replace it at the next reinit
+        if (!proc::proc.virtual_display) {
+          proc::proc.display_name = display_names[display_p];
+        }
       } else {
         return;
       }
@@ -1345,7 +1367,7 @@ namespace video {
             // display_wp is modified in this thread only
             // Wait for the other shared_ptr's of display to be destroyed.
             // New displays will only be created in this thread.
-            while (display_wp->use_count() != 1) {
+            while (display_wp->use_count() != 1 && capture_ctx_queue->running()) {
               // Free images that weren't consumed by the encoders. These can reference the display and prevent
               // the ref count from reaching 1. We do this here rather than on the encoder thread to avoid race
               // conditions where the encoding loop might free a good frame after reinitializing if we capture
@@ -1356,8 +1378,8 @@ namespace video {
                   continue;
                 }
 
-                while (capture_ctx->images->peek()) {
-                  capture_ctx->images->pop();
+                // Never wait here. The encoder can take the image first, and this thread is the only producer.
+                while (capture_ctx->images->pop(0ms)) {
                 }
 
                 ++capture_ctx;
@@ -1382,7 +1404,10 @@ namespace video {
               // reset_display() will sleep between retries
               reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
               if (disp) {
-                proc::proc.display_name = display_names[display_p];
+                // A virtual display session keeps its wanted name, so a fallback can't replace it at the next reinit
+                if (!proc::proc.virtual_display) {
+                  proc::proc.display_name = display_names[display_p];
+                }
                 break;
               }
             }
