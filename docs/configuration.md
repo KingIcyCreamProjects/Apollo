@@ -28,7 +28,7 @@ location by modifying the configuration file.
 | Docker  | @code{}/config@endcode                          |
 | Linux   | @code{}~/.config/sunshine@endcode               |
 | macOS   | @code{}~/.config/sunshine@endcode               |
-| Windows | @code{}%ProgramFiles%\\Sunshine\\config@endcode |
+| Windows | @code{}%ProgramFiles%\\Apollo\\config@endcode |
 
 Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
 editing the `conf` file in a text editor. Use the examples as reference.
@@ -238,6 +238,30 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### global_state_cmd
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            A list of commands to be run when the first client connects (resume) and when the last client
+            disconnects (pause). Pause commands are not run when the session terminates.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            []
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            global_state_cmd = [{"do":"nircmd.exe mutesysvolume 0","undo":"nircmd.exe mutesysvolume 1"}]
+            @endcode</td>
+    </tr>
+</table>
+
 ### notify_pre_releases
 
 <table>
@@ -280,6 +304,75 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             system_tray = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### hide_tray_controls
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Do not show "Force Stop", "Restart" and "Quit" in the tray menu.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hide_tray_controls = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### enable_pairing
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allow new clients to pair with the host. Already paired clients are not affected.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_pairing = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### enable_discovery
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Advertise the host to clients on the local network. When disabled, enter the host IP on the client to pair.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_discovery = disabled
             @endcode</td>
     </tr>
 </table>
@@ -687,6 +780,53 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### enable_input_only_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Add an Input Only app entry. It receives no video or audio, and is useful for controlling the host
+            desktop from a client.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_input_only_mode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### forward_rumble
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Forward rumble messages from the host to clients.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            forward_rumble = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### keybindings
 
 <table>
@@ -763,7 +903,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <br>
             Enter the following command in command prompt or PowerShell.
             @code{}
-            %ProgramFiles%\Sunshine\tools\audio-info.exe
+            %ProgramFiles%\Apollo\tools\audio-info.exe
             @endcode
             If you have multiple audio devices with identical names, use the Device ID instead.
             }
@@ -873,6 +1013,54 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### keep_sink_default
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Keep the selected virtual sink as the default audio device. Effective when host audio output is disabled.
+            @note{This option is only supported on Windows.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            keep_sink_default = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### auto_capture_sink
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Capture the current default audio sink again after the default sink changes.
+            @note{This option is only supported on Windows.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            auto_capture_sink = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### adapter_name
 
 <table>
@@ -900,7 +1088,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <br>
             Enter the following command in command prompt or PowerShell.
             @code{}
-            %ProgramFiles%\Sunshine\tools\dxgi-info.exe
+            %ProgramFiles%\Apollo\tools\dxgi-info.exe
             @endcode
             For hybrid graphics systems, DXGI reports the outputs are connected to whichever graphics
             adapter that the application is configured to use, so it's not a reliable indicator of how the
@@ -1413,6 +1601,76 @@ editing the `conf` file in a text editor. Use the examples as reference.
               ]
             }@endcode
         </td>
+    </tr>
+</table>
+
+### fallback_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Display mode used when the client does not provide one or the app is launched from the Web UI.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            1920x1080x60
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            fallback_mode = 1920x1080x60
+            @endcode</td>
+    </tr>
+</table>
+
+### headless_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Start every app on the virtual display.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            headless_mode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### double_refreshrate
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Double the refresh rate requested when creating a virtual display. The streamed refresh rate does not change.
+            This can reduce stutter on some systems.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            double_refreshrate = enabled
+            @endcode</td>
     </tr>
 </table>
 
@@ -1930,6 +2188,100 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### limit_framerate
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Limit the captured framerate to the framerate requested by the client. Capture may fall below it if vsync is on
+            and the display refresh rate does not match. If disabled, some clients may lag.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            limit_framerate = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### envvar_compatibility_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Change some environment variable behavior to stay compatible with older tools.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            envvar_compatibility_mode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### legacy_ordering
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enable app ordering support for legacy clients. Clients or scripts that cannot handle UTF-8 correctly may break.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            legacy_ordering = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### ignore_encoder_probe_failure
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Continue starting when probing for encoders fails, for example when a laptop GPU is asleep. Streaming fails if no
+            encoder is available.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            ignore_encoder_probe_failure = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### hevc_mode
 
 <table>
@@ -2066,7 +2418,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>wgc</td>
         <td>(beta feature) Use Windows.Graphics.Capture to capture the display.
             @note{Applies to Windows only.}
-            @attention{This capture method is not compatible with the Sunshine service.}</td>
+            @attention{This capture method is not compatible with the Apollo service.}</td>
     </tr>
 </table>
 
@@ -2375,6 +2727,31 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             nvenc_h264_cavlc = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### nvenc_intra_refresh
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Use intra refresh instead of periodic keyframes, which some clients need to render correctly (for example
+            the Xbox client).
+            @note{This option only applies when using the NVENC [encoder](#encoder).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_intra_refresh = enabled
             @endcode</td>
     </tr>
 </table>

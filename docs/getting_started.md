@@ -334,13 +334,13 @@ overflow menu. Different versions of Windows may provide slightly different step
    Install:
    ```bash
    cd /d {path to extracted directory}
-   scripts/install-gamepad.bat
+   scripts/install-gamepad.ps1
    ```
 
    Uninstall:
    ```bash
    cd /d {path to extracted directory}
-   scripts/uninstall-gamepad.bat
+   scripts/uninstall-gamepad.ps1
    ```
 
 5. Windows service
@@ -459,6 +459,10 @@ on how to set up a headless streaming server without autologin and dummy plugs (
 
 Sunshine is configured via the web ui, which is available on [https://localhost:47990](https://localhost:47990)
 by default. You may replace *localhost* with your internal ip address.
+
+> [!NOTE]
+> On Windows the configuration, including pairing state, is stored in `%ProgramFiles%Apolloconfig`. Include it in
+> your backups.
 
 > [!NOTE]
 > Ignore any warning given by your browser about "insecure website". This is due to the SSL certificate

@@ -20,9 +20,19 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple("shortname-123", "shortname-123"),
     std::make_tuple("space 123", "space-123"),
     std::make_tuple("hostname.domain.test", "hostname"),
-    std::make_tuple("&", "Sunshine"),
-    std::make_tuple("", "Sunshine"),
-    std::make_tuple("😁", "Sunshine"),
+    std::make_tuple("&", "Apollo"),
+    std::make_tuple("", "Apollo"),
+    std::make_tuple("😁", "Apollo"),
     std::make_tuple(std::string(128, 'a'), std::string(63, 'a'))
   )
 );
+
+TEST(HostCreateTest, ReturnsNullWhenPortInUse) {
+  boost::asio::io_context io;
+  boost::asio::ip::udp::socket holder {io, boost::asio::ip::udp::endpoint {boost::asio::ip::address_v4::any(), 0}};
+  auto port = holder.local_endpoint().port();
+
+  ENetAddress addr {};
+  auto host = net::host_create(net::IPV4, addr, port);
+  ASSERT_FALSE(host);
+}
