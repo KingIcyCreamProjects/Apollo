@@ -186,6 +186,10 @@ TEST(InputBatchingTest, RelativeOverflowTerminatesAndKeepsDest) {
   src = rel(1, -32000);
   EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
   EXPECT_EQ(dest, rel(1, -32000));
+  dest = rel(32000, 32000);
+  src = rel(32000, 32000);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
+  EXPECT_EQ(dest, rel(32000, 32000));
 }
 
 TEST(InputBatchingTest, ScrollMergesOrTerminates) {
