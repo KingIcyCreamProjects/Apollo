@@ -1454,7 +1454,9 @@ namespace nvhttp {
 
         if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display()) {
           BOOST_LOG(warning) << "Virtual display is gone, terminating app so the client relaunches"sv;
-          proc::proc.terminate();
+          if (!!(named_cert_p->perm & PERM::launch)) {
+            proc::proc.terminate();
+          }
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 503);
           tree.put("root.<xmlattr>.status_message", "Virtual display lost, please launch again");
@@ -1591,7 +1593,9 @@ namespace nvhttp {
 
       if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display()) {
         BOOST_LOG(warning) << "Virtual display is gone, terminating app so the client relaunches"sv;
-        proc::proc.terminate();
+        if (!!(named_cert_p->perm & PERM::launch)) {
+          proc::proc.terminate();
+        }
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "Virtual display lost, please launch again");

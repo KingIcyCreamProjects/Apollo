@@ -167,7 +167,8 @@ namespace proc {
     // display_device::map_display_name is empty when dd config is disabled, so ask the OS directly.
     LUID adapterId;
     uint32_t targetId;
-    return VDISPLAY::findDisplayIds(platf::from_utf8(display_name).c_str(), adapterId, targetId);
+    // Fail open when the CCD API is inaccessible (e.g. locked desktop): display state is unknown, not lost.
+    return VDISPLAY::findDisplayIds(platf::from_utf8(display_name).c_str(), adapterId, targetId) || test_no_access_to_ccd_api();
 #else
     return true;
 #endif
