@@ -1195,12 +1195,6 @@ namespace input {
     gamepad.gamepad_state = gamepad_state;
   }
 
-  enum class batch_result_e {
-    batched,  ///< This entry was batched with the source entry
-    not_batchable,  ///< Not eligible to batch but continue attempts to batch
-    terminate_batch,  ///< Stop trying to batch with this entry
-  };
-
   /**
    * @brief Batch two relative mouse messages.
    * @param dest The original packet to batch into.
@@ -1211,10 +1205,10 @@ namespace input {
     short deltaX, deltaY;
 
     // Batching is safe as long as the result doesn't overflow a 16-bit integer
-    if (!__builtin_add_overflow(util::endian::big(dest->deltaX), util::endian::big(src->deltaX), &deltaX)) {
+    if (__builtin_add_overflow(util::endian::big(dest->deltaX), util::endian::big(src->deltaX), &deltaX)) {
       return batch_result_e::terminate_batch;
     }
-    if (!__builtin_add_overflow(util::endian::big(dest->deltaY), util::endian::big(src->deltaY), &deltaY)) {
+    if (__builtin_add_overflow(util::endian::big(dest->deltaY), util::endian::big(src->deltaY), &deltaY)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1251,7 +1245,7 @@ namespace input {
     short scrollAmt;
 
     // Batching is safe as long as the result doesn't overflow a 16-bit integer
-    if (!__builtin_add_overflow(util::endian::big(dest->scrollAmt1), util::endian::big(src->scrollAmt1), &scrollAmt)) {
+    if (__builtin_add_overflow(util::endian::big(dest->scrollAmt1), util::endian::big(src->scrollAmt1), &scrollAmt)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1271,7 +1265,7 @@ namespace input {
     short scrollAmt;
 
     // Batching is safe as long as the result doesn't overflow a 16-bit integer
-    if (!__builtin_add_overflow(util::endian::big(dest->scrollAmount), util::endian::big(src->scrollAmount), &scrollAmt)) {
+    if (__builtin_add_overflow(util::endian::big(dest->scrollAmount), util::endian::big(src->scrollAmount), &scrollAmt)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1497,14 +1491,14 @@ namespace input {
       }
 
       // Pop off the first entry, which we will send
-      entry = input->input_queue.front();
+      entry = std::move(input->input_queue.front());
       payload = (PNV_INPUT_HEADER) entry.data();
       input->input_queue.pop_front();
 
       // Try to batch with remaining items on the queue
       auto i = input->input_queue.begin();
       while (i != input->input_queue.end()) {
-        auto batchable_entry = *i;
+        auto &batchable_entry = *i;
         auto batchable_payload = (PNV_INPUT_HEADER) batchable_entry.data();
 
         auto batch_result = batch(payload, batchable_payload);
@@ -1797,6 +1791,10 @@ namespace input {
   namespace testing {
     bool is_valid_input_packet(std::span<const std::uint8_t> packet) {
       return ::input::validate_input_packet(packet);
+    }
+
+    batch_result_e batch_packets(std::vector<std::uint8_t> &dest, std::vector<std::uint8_t> &src) {
+      return ::input::batch((PNV_INPUT_HEADER) dest.data(), (PNV_INPUT_HEADER) src.data());
     }
   }  // namespace testing
 #endif

@@ -137,3 +137,77 @@ TEST(InputPacketValidationTest, PassthroughDropsEmptyPacketBeforePermissionFilte
   input::passthrough(stream_input, std::vector<std::uint8_t> {}, crypto::PERM::input_mouse);
   SUCCEED();
 }
+
+namespace {
+  template<typename P, typename Fill>
+  std::vector<std::uint8_t> make_packet(std::uint32_t magic, Fill fill) {
+    std::vector<std::uint8_t> bytes(sizeof(P));
+    auto *p = reinterpret_cast<P *>(bytes.data());
+    p->header.size = util::endian::big<std::uint32_t>(sizeof(P) - sizeof(std::uint32_t));
+    p->header.magic = util::endian::little(magic);
+    fill(p);
+    return bytes;
+  }
+
+  std::vector<std::uint8_t> rel(short x, short y) {
+    return make_packet<NV_REL_MOUSE_MOVE_PACKET>(MOUSE_MOVE_REL_MAGIC_GEN5, [&](auto *p) {
+      p->deltaX = util::endian::big(x);
+      p->deltaY = util::endian::big(y);
+    });
+  }
+
+  std::vector<std::uint8_t> vscroll(short a) {
+    return make_packet<NV_SCROLL_PACKET>(SCROLL_MAGIC_GEN5, [&](auto *p) {
+      p->scrollAmt1 = util::endian::big(a);
+      p->scrollAmt2 = util::endian::big(a);
+    });
+  }
+
+  std::vector<std::uint8_t> hscroll(short a) {
+    return make_packet<SS_HSCROLL_PACKET>(SS_HSCROLL_MAGIC, [&](auto *p) {
+      p->scrollAmount = util::endian::big(a);
+    });
+  }
+}  // namespace
+
+TEST(InputBatchingTest, RelativeMovesMergeToSum) {
+  auto dest = rel(1, 2);
+  auto src = rel(3, 4);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::batched);
+  EXPECT_EQ(dest, rel(4, 6));
+}
+
+TEST(InputBatchingTest, RelativeOverflowTerminatesAndKeepsDest) {
+  auto dest = rel(32000, 1);
+  auto src = rel(32000, 1);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
+  EXPECT_EQ(dest, rel(32000, 1));
+  dest = rel(1, -32000);
+  src = rel(1, -32000);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
+  EXPECT_EQ(dest, rel(1, -32000));
+  dest = rel(32000, 32000);
+  src = rel(32000, 32000);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
+  EXPECT_EQ(dest, rel(32000, 32000));
+}
+
+TEST(InputBatchingTest, ScrollMergesOrTerminates) {
+  auto dest = vscroll(10);
+  auto src = vscroll(20);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::batched);
+  EXPECT_EQ(dest, vscroll(30));
+  dest = vscroll(32000);
+  src = vscroll(32000);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
+  EXPECT_EQ(dest, vscroll(32000));
+
+  dest = hscroll(10);
+  src = hscroll(20);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::batched);
+  EXPECT_EQ(dest, hscroll(30));
+  dest = hscroll(32000);
+  src = hscroll(32000);
+  EXPECT_EQ(input::testing::batch_packets(dest, src), input::batch_result_e::terminate_batch);
+  EXPECT_EQ(dest, hscroll(32000));
+}
