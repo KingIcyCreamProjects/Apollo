@@ -8,6 +8,9 @@
 #include <src/config.h>
 #include <src/nvhttp.h>
 
+#include <future>
+#include <thread>
+
 using namespace nvhttp;
 
 struct pairing_input {
@@ -255,4 +258,227 @@ TEST(PairingTest, OutOfOrderCalls) {
   // Calling it again should fail
   getservercert(sess, tree, "test");
   ASSERT_FALSE(tree.get<int>("root.paired") == 1);
+}
+
+namespace {
+  const std::string SALT = "ff5dc6eda99339a8a0793e216c4257c4";
+  const std::string OTHER_SALT = "00112233445566778899aabbccddeeff";
+  const std::string CERT_HEX = "AABB";
+  const std::string OTHER_CERT_HEX = "CCDD";
+
+  args_t request_args(const std::string &cert_hex, const std::string &salt) {
+    return {{"devicename", "test"}, {"clientcert", cert_hex}, {"salt", salt}};
+  }
+
+  pair_session_t &add_session(const std::string &id, PAIR_PHASE phase = PAIR_PHASE::NONE) {
+    return map_id_sess.emplace(
+      id,
+      pair_session_t {
+        .client = {.uniqueID = id, .cert = PUBLIC_CERT, .name = "test"},
+        .async_insert_pin = {.salt = SALT},
+        .last_phase = phase
+      }
+    ).first->second;
+  }
+
+  /**
+   * Runs the same handshake vectors as PairingTest against a session in the map,
+   * while another thread waits in pin().
+   */
+  void expect_pin_result_from_handshake(const std::string &entered_pin, bool expected) {
+    const auto clients_before = get_all_clients().size();
+    add_session("1234");
+
+    auto result = std::async(std::launch::async, [&entered_pin]() {
+      return pin(entered_pin, "test");
+    });
+
+    // pin() takes the session out of phase NONE before it starts waiting
+    const auto give_up = std::chrono::steady_clock::now() + 5s;
+    bool got_pin = false;
+    while (!got_pin && std::chrono::steady_clock::now() < give_up) {
+      {
+        std::scoped_lock lock {map_id_sess_mutex};
+        got_pin = map_id_sess.at("1234").last_phase == PAIR_PHASE::GETSERVERCERT;
+      }
+      std::this_thread::sleep_for(1ms);
+    }
+    ASSERT_TRUE(got_pin);
+
+    {
+      std::scoped_lock lock {map_id_sess_mutex};
+      auto &sess = map_id_sess.at("1234");
+      boost::property_tree::ptree tree;
+      clientchallenge(sess, tree, util::from_hex_vec("741CD3D6890C16DA39D53BCA0893AAF0", true));
+      serverchallengeresp(sess, tree, util::from_hex_vec("920BABAE9F7599AA1CA8EC87FB3454C91872A7D8D5127DDC176C2FDAE635CF7A", true));
+      sess.serverchallenge = util::from_hex_vec("AAAAAAAAAAAAAAAA", true);
+      clientpairingsecret(
+        sess,
+        tree,
+        util::from_hex_vec("000102030405060708090A0B0C0D0EFF"  // secret
+                           "9BB74D8DE2FF006C3F47FC45EFDAA97D433783AFAB3ACD85CA7ED2330BB2A7BD18A5B044AF8CAC177116FAE8A6E8E44653A8944A0F8EA138B2E013756D847D2C4FC52F736E2E7E9B4154712B18F8307B2A161E010F0587744163E42ECA9EA548FC435756EDCF1FEB94037631ABB72B29DDAC0EA5E61F2DBFCC3B20AA021473CC85AC98D88052CA6618ED1701EFBF142C18D5E779A3155B84DF65057D4823EC194E6DF14006793E8D7A3DCCE20A911636C4E01ECA8B54B9DE9F256F15DE9A980EA024B30D77579140D45EC220C738164BDEEEBF7364AE94A5FF9B784B40F2E640CE8603017DEEAC7B2AD77B807C643B7B349C110FE15F94C7B3D37FF15FDFBE26",
+                           true)
+      );
+    }
+
+    EXPECT_EQ(result.get(), expected);
+    EXPECT_TRUE(map_id_sess.empty());
+    EXPECT_EQ(get_all_clients().size(), clients_before + (expected ? 1 : 0));
+  }
+}  // namespace
+
+class PairingSessionTest: public testing::Test {
+protected:
+  void SetUp() override {
+    // Keep pairing results out of the state file
+    config::sunshine.flags.set(config::flag::FRESH_STATE);
+    setup(PRIVATE_KEY, PUBLIC_CERT);
+    map_id_sess.clear();
+  }
+
+  void TearDown() override {
+    map_id_sess.clear();
+    config::stream.ping_timeout = original_ping_timeout;
+  }
+
+  const std::chrono::milliseconds original_ping_timeout = config::stream.ping_timeout;
+  boost::property_tree::ptree tree;
+};
+
+TEST_F(PairingSessionTest, PinWithShortSaltFailsAndDropsSession) {
+  add_session("1234").async_insert_pin.salt = "ab";
+
+  EXPECT_FALSE(pin("5338", "test"));
+  EXPECT_TRUE(map_id_sess.empty());
+}
+
+TEST_F(PairingSessionTest, PinIgnoresSessionPastPhaseNone) {
+  add_session("1234", PAIR_PHASE::GETSERVERCERT);
+
+  EXPECT_FALSE(pin("5338", "test"));
+  EXPECT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::GETSERVERCERT);
+}
+
+TEST_F(PairingSessionTest, PinRefusesWhenTwoSessionsAreWaiting) {
+  add_session("1234");
+  add_session("5678");
+
+  EXPECT_FALSE(pin("5338", "test"));
+  EXPECT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::NONE);
+  EXPECT_EQ(map_id_sess.at("5678").last_phase, PAIR_PHASE::NONE);
+}
+
+TEST_F(PairingSessionTest, PinRefusesWithoutSession) {
+  EXPECT_FALSE(pin("5338", "test"));
+}
+
+TEST_F(PairingSessionTest, PinFailsAndDropsSessionOnTimeout) {
+  config::stream.ping_timeout = 50ms;
+  add_session("1234");
+
+  EXPECT_FALSE(pin("5338", "test"));
+  EXPECT_TRUE(map_id_sess.empty());
+}
+
+TEST_F(PairingSessionTest, PinReturnsTrueAfterHandshakeWithRightPin) {
+  expect_pin_result_from_handshake("5338", true);
+}
+
+TEST_F(PairingSessionTest, PinReturnsFalseAfterHandshakeWithWrongPin) {
+  expect_pin_result_from_handshake("0000", false);
+}
+
+TEST_F(PairingSessionTest, RetryReplacesSessionPastPhaseNone) {
+  auto completion = add_session("1234", PAIR_PHASE::CLIENTCHALLENGE).completion;
+
+  auto sess = start_pair_session(request_args(CERT_HEX, OTHER_SALT), "1234", tree);
+
+  ASSERT_NE(sess, nullptr);
+  EXPECT_EQ(sess->last_phase, PAIR_PHASE::NONE);
+  EXPECT_EQ(sess->async_insert_pin.salt, OTHER_SALT);
+  EXPECT_EQ(map_id_sess.size(), 1u);
+  // A pin() call still waiting on the old session must not wait for its timeout
+  EXPECT_EQ(completion->result, false);
+}
+
+TEST_F(PairingSessionTest, StaleSessionDoesNotConsumeOtp) {
+  const std::string passphrase = "passphrase";
+  const auto otp = request_otp(passphrase, "otp device");
+  add_session("1234", PAIR_PHASE::GETSERVERCERT);
+
+  auto hash = util::hex(crypto::hash(otp + SALT + passphrase), true);
+  auto args = request_args(CERT_HEX, SALT);
+  args.emplace("otpauth", std::string {hash.to_string_view()});
+
+  EXPECT_EQ(start_pair_session(args, "1234", tree), nullptr);
+  EXPECT_EQ(tree.get<int>("root.paired"), 1);
+  EXPECT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::GETSERVERCERT);
+  EXPECT_EQ(map_id_sess.at("1234").client.name, "otp device");
+}
+
+TEST_F(PairingSessionTest, DifferentCertCannotTakeOverWaitingSession) {
+  ASSERT_NE(start_pair_session(request_args(CERT_HEX, SALT), "1234", tree), nullptr);
+  const auto cert = map_id_sess.at("1234").client.cert;
+
+  EXPECT_EQ(start_pair_session(request_args(OTHER_CERT_HEX, OTHER_SALT), "1234", tree), nullptr);
+
+  EXPECT_EQ(tree.get<int>("root.<xmlattr>.status_code"), 409);
+  EXPECT_EQ(map_id_sess.at("1234").client.cert, cert);
+  EXPECT_EQ(map_id_sess.at("1234").async_insert_pin.salt, SALT);
+}
+
+TEST_F(PairingSessionTest, SameCertReplacesWaitingSession) {
+  ASSERT_NE(start_pair_session(request_args(CERT_HEX, SALT), "1234", tree), nullptr);
+
+  ASSERT_NE(start_pair_session(request_args(CERT_HEX, OTHER_SALT), "1234", tree), nullptr);
+
+  EXPECT_EQ(map_id_sess.size(), 1u);
+  EXPECT_EQ(map_id_sess.at("1234").async_insert_pin.salt, OTHER_SALT);
+}
+
+TEST_F(PairingSessionTest, BadArgumentsLeaveNoSession) {
+  EXPECT_EQ(start_pair_session({{"devicename", "test"}, {"clientcert", CERT_HEX}}, "1234", tree), nullptr);
+  EXPECT_EQ(tree.get<int>("root.<xmlattr>.status_code"), 400);
+
+  EXPECT_EQ(start_pair_session(request_args(CERT_HEX, "ab"), "1234", tree), nullptr);
+  EXPECT_EQ(tree.get<int>("root.<xmlattr>.status_code"), 400);
+
+  EXPECT_THROW(start_pair_session({{"devicename", "test"}, {"salt", SALT}}, "1234", tree), std::out_of_range);
+
+  EXPECT_TRUE(map_id_sess.empty());
+}
+
+TEST_F(PairingSessionTest, NewSessionGetsDeadline) {
+  const auto before = std::chrono::steady_clock::now();
+
+  auto sess = start_pair_session(request_args(CERT_HEX, SALT), "1234", tree);
+
+  ASSERT_NE(sess, nullptr);
+  EXPECT_GE(sess->expires_at, before + PAIRING_SESSION_TIMEOUT);
+  EXPECT_LE(sess->expires_at, std::chrono::steady_clock::now() + PAIRING_SESSION_TIMEOUT);
+}
+
+TEST_F(PairingSessionTest, ExpiredSessionIsDropped) {
+  auto &sess = add_session("1234");
+  sess.expires_at = std::chrono::steady_clock::now() - 1s;
+  auto completion = sess.completion;
+
+  // The expired session would otherwise take this PIN
+  EXPECT_FALSE(pin("5338", "test"));
+
+  EXPECT_TRUE(map_id_sess.empty());
+  EXPECT_EQ(completion->result, false);
+}
+
+TEST_F(PairingSessionTest, SessionCountIsCapped) {
+  for (std::size_t i = 0; i < MAX_PENDING_PAIRING_SESSIONS; ++i) {
+    add_session(std::to_string(i), PAIR_PHASE::GETSERVERCERT);
+  }
+
+  EXPECT_EQ(start_pair_session(request_args(CERT_HEX, SALT), "new", tree), nullptr);
+  EXPECT_EQ(tree.get<int>("root.<xmlattr>.status_code"), 503);
+  EXPECT_EQ(map_id_sess.size(), MAX_PENDING_PAIRING_SESSIONS);
+
+  // A retry frees its own slot first
+  EXPECT_NE(start_pair_session(request_args(CERT_HEX, SALT), "0", tree), nullptr);
 }

@@ -6,6 +6,7 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <string>
@@ -148,6 +149,8 @@ namespace nvhttp {
 
   // uniqueID, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
+  // The HTTP and HTTPS servers and the web UI thread all reach the sessions and the OTP state
+  std::mutex map_id_sess_mutex;
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
@@ -470,8 +473,52 @@ namespace nvhttp {
     return launch_session;
   }
 
+  static void complete_pairing(const pair_session_t &sess, bool success) {
+    {
+      std::scoped_lock lock {sess.completion->mutex};
+      if (sess.completion->result) {
+        return;
+      }
+      sess.completion->result = success;
+    }
+    sess.completion->condition.notify_all();
+  }
+
   void remove_session(const pair_session_t &sess) {
-    map_id_sess.erase(sess.client.uniqueID);
+    complete_pairing(sess, false);
+    if (auto sess_it = map_id_sess.find(sess.client.uniqueID); sess_it != std::end(map_id_sess)) {
+      map_id_sess.erase(sess_it);
+    }
+  }
+
+  static void write_pair_response(auto &response, const pt::ptree &tree) {
+    std::ostringstream data;
+    pt::write_xml(data, tree);
+
+    if (response.has_left() && response.left()) {
+      response.left()->close_connection_after_response = true;
+      response.left()->write(data.str());
+    } else if (response.has_right() && response.right()) {
+      response.right()->close_connection_after_response = true;
+      response.right()->write(data.str());
+    }
+  }
+
+  static void expire_pair_sessions_unlocked(std::chrono::steady_clock::time_point now) {
+    for (auto it = std::begin(map_id_sess); it != std::end(map_id_sess);) {
+      if (it->second.expires_at > now) {
+        ++it;
+        continue;
+      }
+
+      pt::ptree tree;
+      tree.put("root.paired", 0);
+      tree.put("root.<xmlattr>.status_code", 408);
+      tree.put("root.<xmlattr>.status_message", "Pairing session expired");
+      write_pair_response(it->second.async_insert_pin.response, tree);
+      complete_pairing(it->second, false);
+      it = map_id_sess.erase(it);
+    }
   }
 
   void fail_pair(pair_session_t &sess, pt::ptree &tree, const std::string status_msg) {
@@ -637,6 +684,7 @@ namespace nvhttp {
       named_cert_p->always_use_virtual_display = false;
 
       add_authorized_client(named_cert_p);
+      complete_pairing(sess, true);
     } else {
       tree.put("root.paired", 0);
       BOOST_LOG(warning) << "Pair attempt failed due to same_hash: " << same_hash << ", verify: " << verify;
@@ -697,6 +745,100 @@ namespace nvhttp {
     response->close_connection_after_response = true;
   }
 
+  pair_session_t *start_pair_session(const args_t &args, const std::string &uniqID, pt::ptree &tree) {
+    pair_session_t sess;
+
+    auto deviceName { get_arg(args, "devicename") };
+
+    if (deviceName == "roth"sv) {
+      deviceName = "Legacy Moonlight Client";
+    }
+
+    sess.client.uniqueID = uniqID;
+    sess.client.name = std::move(deviceName);
+    sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
+    sess.async_insert_pin.salt = get_arg(args, "salt", "");
+
+    if (sess.async_insert_pin.salt.size() < 32) {
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Salt too short");
+
+      return nullptr;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    expire_pair_sessions_unlocked(now);
+
+    if (auto existing = map_id_sess.find(uniqID); existing != std::end(map_id_sess)) {
+      // Another client must not displace a session right before the operator enters the PIN.
+      // The same client can, as finishing the handshake needs the private key of that certificate.
+      if (existing->second.last_phase == PAIR_PHASE::NONE && existing->second.client.cert != sess.client.cert) {
+        tree.put("root.<xmlattr>.status_code", 409);
+        tree.put("root.<xmlattr>.status_message", "Another client is pairing with this uniqueid");
+
+        return nullptr;
+      }
+
+      remove_session(existing->second);
+    }
+
+    if (map_id_sess.size() >= MAX_PENDING_PAIRING_SESSIONS) {
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Too many pairing sessions");
+
+      return nullptr;
+    }
+
+    sess.expires_at = now + PAIRING_SESSION_TIMEOUT;
+
+    BOOST_LOG(debug) << sess.client.cert;
+    auto ptr = map_id_sess.emplace(uniqID, std::move(sess)).first;
+
+    auto it = args.find("otpauth");
+    if (it != std::end(args)) {
+      if (one_time_pin.empty() || (std::chrono::steady_clock::now() - otp_creation_time > OTP_EXPIRE_DURATION)) {
+        one_time_pin.clear();
+        otp_passphrase.clear();
+        otp_device_name.clear();
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "OTP auth not available.");
+      } else {
+        auto hash = util::hex(crypto::hash(one_time_pin + ptr->second.async_insert_pin.salt + otp_passphrase), true);
+
+        if (hash.to_string_view() == it->second) {
+
+          if (!otp_device_name.empty()) {
+            ptr->second.client.name = std::move(otp_device_name);
+          }
+
+          getservercert(ptr->second, tree, one_time_pin);
+
+          one_time_pin.clear();
+          otp_passphrase.clear();
+          otp_device_name.clear();
+          return nullptr;
+        }
+      }
+
+      // Always return positive, attackers will fail in the next steps.
+      getservercert(ptr->second, tree, crypto::rand(16));
+      return nullptr;
+    }
+
+    if (config::sunshine.flags[config::flag::PIN_STDIN]) {
+      std::string pin;
+
+      // This holds map_id_sess_mutex across the prompt, which only happens when running from the CLI
+      std::cout << "Please insert pin: "sv;
+      std::getline(std::cin, pin);
+
+      getservercert(ptr->second, tree, pin);
+      return nullptr;
+    }
+
+    return &ptr->second;
+  }
+
   template <class T>
   void pair(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
     print_req<T>(request);
@@ -728,73 +870,23 @@ namespace nvhttp {
 
     auto uniqID {get_arg(args, "uniqueid")};
 
+    std::scoped_lock lock {map_id_sess_mutex};
+
     args_t::const_iterator it;
     if (it = args.find("phrase"); it != std::end(args)) {
       if (it->second == "getservercert"sv) {
-        pair_session_t sess;
-
-        auto deviceName { get_arg(args, "devicename") };
-
-        if (deviceName == "roth"sv) {
-          deviceName = "Legacy Moonlight Client";
-        }
-
-        sess.client.uniqueID = std::move(uniqID);
-        sess.client.name = std::move(deviceName);
-        sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
-
-        BOOST_LOG(debug) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
-
-        ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
-
-        auto it = args.find("otpauth");
-        if (it != std::end(args)) {
-          if (one_time_pin.empty() || (std::chrono::steady_clock::now() - otp_creation_time > OTP_EXPIRE_DURATION)) {
-            one_time_pin.clear();
-            otp_passphrase.clear();
-            otp_device_name.clear();
-            tree.put("root.<xmlattr>.status_code", 503);
-            tree.put("root.<xmlattr>.status_message", "OTP auth not available.");
-          } else {
-            auto hash = util::hex(crypto::hash(one_time_pin + ptr->second.async_insert_pin.salt + otp_passphrase), true);
-
-            if (hash.to_string_view() == it->second) {
-
-              if (!otp_device_name.empty()) {
-                ptr->second.client.name = std::move(otp_device_name);
-              }
-
-              getservercert(ptr->second, tree, one_time_pin);
-
-              one_time_pin.clear();
-              otp_passphrase.clear();
-              otp_device_name.clear();
-              return;
-            }
-          }
-
-          // Always return positive, attackers will fail in the next steps.
-          getservercert(ptr->second, tree, crypto::rand(16));
+        auto sess = start_pair_session(args, uniqID, tree);
+        if (!sess) {
           return;
         }
 
-        if (config::sunshine.flags[config::flag::PIN_STDIN]) {
-          std::string pin;
-
-          std::cout << "Please insert pin: "sv;
-          std::getline(std::cin, pin);
-
-          getservercert(ptr->second, tree, pin);
-        } else {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-          system_tray::update_tray_require_pin();
+        system_tray::update_tray_require_pin();
 #endif
-          ptr->second.async_insert_pin.response = std::move(response);
+        sess->async_insert_pin.response = std::move(response);
 
-          fg.disable();
-          return;
-        }
+        fg.disable();
+        return;
       } else if (it->second == "pairchallenge"sv) {
         tree.put("root.paired", 1);
         tree.put("root.<xmlattr>.status_code", 200);
@@ -827,9 +919,6 @@ namespace nvhttp {
 
   bool pin(std::string pin, std::string name) {
     pt::ptree tree;
-    if (map_id_sess.empty()) {
-      return false;
-    }
 
     // ensure pin is 4 digits
     if (pin.size() != 4) {
@@ -850,30 +939,59 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = std::begin(map_id_sess)->second;
-    getservercert(sess, tree, pin);
+    std::shared_ptr<pairing_completion_t> completion;
+    std::chrono::steady_clock::time_point deadline;
+    {
+      std::scoped_lock lock {map_id_sess_mutex};
 
-    if (!name.empty()) {
-      sess.client.name = name;
+      const auto now = std::chrono::steady_clock::now();
+      expire_pair_sessions_unlocked(now);
+
+      // The PIN names no session, so refuse it unless it can only reach one
+      const auto is_pending = [](const auto &entry) {
+        return entry.second.last_phase == PAIR_PHASE::NONE;
+      };
+      if (std::ranges::count_if(map_id_sess, is_pending) != 1) {
+        return false;
+      }
+      auto &sess = std::ranges::find_if(map_id_sess, is_pending)->second;
+
+      if (!name.empty()) {
+        sess.client.name = name;
+      }
+
+      completion = sess.completion;
+      deadline = sess.expires_at;
+      if (config::stream.ping_timeout > 0ms) {
+        deadline = std::min(deadline, now + config::stream.ping_timeout);
+      }
+      auto async_response = std::move(sess.async_insert_pin.response);
+
+      // This erases the session when it fails, so sess must not be used after it
+      getservercert(sess, tree, pin);
+
+      // response to the request for pin
+      write_pair_response(async_response, tree);
     }
 
-    // response to the request for pin
-    std::ostringstream data;
-    pt::write_xml(data, tree);
-
-    auto &async_response = sess.async_insert_pin.response;
-    if (async_response.has_left() && async_response.left()) {
-      async_response.left()->write(data.str());
-    } else if (async_response.has_right() && async_response.right()) {
-      async_response.right()->write(data.str());
-    } else {
-      return false;
+    {
+      std::unique_lock lock {completion->mutex};
+      if (completion->condition.wait_until(lock, deadline, [&completion]() {
+            return completion->result.has_value();
+          })) {
+        return *completion->result;
+      }
     }
 
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
-    // response to the current request
-    return true;
+    // A wrong PIN ends here too, as Moonlight just stops the handshake when it sees the mismatch
+    std::scoped_lock lock {map_id_sess_mutex};
+    const auto sess_it = std::ranges::find_if(map_id_sess, [&completion](const auto &entry) {
+      return entry.second.completion == completion;
+    });
+    if (sess_it != std::end(map_id_sess)) {
+      remove_session(sess_it->second);
+    }
+    return false;
   }
 
   template<class T>
@@ -1771,6 +1889,8 @@ namespace nvhttp {
     if (passphrase.size() < 4) {
       return "";
     }
+
+    std::scoped_lock lock {map_id_sess_mutex};
 
     one_time_pin = crypto::rand_alphabet(4, "0123456789"sv);
     otp_passphrase = passphrase;
