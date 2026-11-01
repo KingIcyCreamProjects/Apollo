@@ -62,33 +62,15 @@ rem Check if removing from path
 if /i "%~1"=="remove" (
     set "CHANGES_MADE=0"
 
-    rem Process each directory to remove
+    rem Remove each directory by substitution; tokenizing PATH on ; breaks quoted and wildcard entries
+    set "NEW_PATH=;!CURRENT_PATH!;"
     for /L %%i in (0,1,1) do (
-        set "DIR_TO_REMOVE=!PATHS_TO_MANAGE[%%i]!"
-
-        rem Check if path contains this directory
-        echo "!CURRENT_PATH!" | findstr /i /c:"!DIR_TO_REMOVE!" > nul
-        if !ERRORLEVEL!==0 (
-            echo Removing from path: !DIR_TO_REMOVE!
-
-            rem Build a new path by parsing and filtering the current path
-            set "NEW_PATH="
-            for %%p in ("!CURRENT_PATH:;=" "!") do (
-                set "PART=%%~p"
-                if /i "!PART!" NEQ "!DIR_TO_REMOVE!" (
-                    if defined NEW_PATH (
-                        set "NEW_PATH=!NEW_PATH!;!PART!"
-                    ) else (
-                        set "NEW_PATH=!PART!"
-                    )
-                )
-            )
-
-            set "CURRENT_PATH=!NEW_PATH!"
-            set "CHANGES_MADE=1"
-        ) else (
-            echo !DIR_TO_REMOVE! not found in path
-        )
+        for /f "delims=" %%d in ("!PATHS_TO_MANAGE[%%i]!") do set "NEW_PATH=!NEW_PATH:;%%d;=;!"
+    )
+    set "NEW_PATH=!NEW_PATH:~1,-1!"
+    if "!NEW_PATH!" neq "!CURRENT_PATH!" (
+        set "CURRENT_PATH=!NEW_PATH!"
+        set "CHANGES_MADE=1"
     )
 
     rem Only update if path was changed

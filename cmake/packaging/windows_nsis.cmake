@@ -17,7 +17,6 @@ SET(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
         nsExec::ExecToLog \
           'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\\"$INSTDIR\\\\scripts\\\\install-gamepad.ps1\\\"'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\install-service.bat\\\"'
-        nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\autostart-service.bat\\\"'
         ")
 
 # Extra uninstall commands
