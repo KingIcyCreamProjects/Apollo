@@ -505,6 +505,10 @@ namespace nvhttp {
       launch_session->fps = 60000; // 60fps * 1000 denominator
     }
 
+    // Encoders need even dimensions (odd 1179 fails NvEnc input texture creation)
+    launch_session->width &= ~1;
+    launch_session->height &= ~1;
+
     launch_session->device_name = named_cert_p->name.empty() ? "ApolloDisplay"s : named_cert_p->name;
     launch_session->unique_id = named_cert_p->uuid;
     launch_session->perm = named_cert_p->perm;
@@ -515,6 +519,9 @@ namespace nvhttp {
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->virtual_display = util::from_view(get_arg(args, "virtualDisplay", "0")) || named_cert_p->always_use_virtual_display;
     launch_session->scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
+    if (launch_session->scale_factor == 0 || launch_session->scale_factor > 400) {
+      launch_session->scale_factor = 100;
+    }
 
     launch_session->client_do_cmds = named_cert_p->do_cmds;
     launch_session->client_undo_cmds = named_cert_p->undo_cmds;

@@ -749,6 +749,26 @@ TEST_F(LaunchSessionTest, DisplayModeFallsBackWhenInvalid) {
 TEST_F(LaunchSessionTest, ParsesValidDisplayMode) {
   auto session = make_launch_session(false, false, launch_args(key16, "2556x1179x60"), &cert);
   EXPECT_EQ(session->width, 2556);
-  EXPECT_EQ(session->height, 1179);
+  EXPECT_EQ(session->height, 1178);
   EXPECT_EQ(session->fps, 60000);
+}
+
+TEST_F(LaunchSessionTest, RoundsOddDimensionsToEven) {
+  auto portrait = make_launch_session(false, false, launch_args(key16, "1179x2556x60"), &cert);
+  EXPECT_EQ(portrait->width, 1178);
+  EXPECT_EQ(portrait->height, 2556);
+}
+
+TEST_F(LaunchSessionTest, NegativeModeFallsBack) {
+  auto session = make_launch_session(false, false, launch_args(key16, "-1x-1x60"), &cert);
+  EXPECT_EQ(session->width, 1920);
+  EXPECT_EQ(session->height, 1080);
+}
+
+TEST_F(LaunchSessionTest, InvalidScaleFactorBecomes100) {
+  for (const char *sf : {"0", "401"}) {
+    auto args = launch_args(key16, "1920x1080x60");
+    args.emplace("scaleFactor", sf);
+    EXPECT_EQ(make_launch_session(false, false, args, &cert)->scale_factor, 100u) << sf;
+  }
 }
