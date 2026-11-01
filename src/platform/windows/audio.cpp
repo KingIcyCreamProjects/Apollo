@@ -783,6 +783,28 @@ namespace platf::audio {
     }
 
     /**
+     * Read PKEY_AudioEngine_DeviceFormat of a device. Returns nullopt unless the blob is a
+     * complete WAVE_FORMAT_EXTENSIBLE.
+     */
+    std::optional<WAVEFORMATEXTENSIBLE> read_device_format(IMMDevice *dev) {
+      audio::prop_t prop;
+      prop_var_t format_var;
+      if (!dev || FAILED(dev->OpenPropertyStore(STGM_READ, &prop)) || FAILED(prop->GetValue(PKEY_AudioEngine_DeviceFormat, &format_var.prop))) {
+        return std::nullopt;
+      }
+      auto &blob = format_var.prop.blob;
+      if (blob.cbSize < sizeof(WAVEFORMATEXTENSIBLE) || !blob.pBlobData) {
+        return std::nullopt;
+      }
+      WAVEFORMATEXTENSIBLE format;
+      std::memcpy(&format, blob.pBlobData, sizeof(format));
+      if (format.Format.wFormatTag != WAVE_FORMAT_EXTENSIBLE) {
+        return std::nullopt;
+      }
+      return format;
+    }
+
+    /**
      * If the requested sink is a virtual sink, meaning no speakers attached to
      * the host, then we can seamlessly set the format to stereo and surround sound.
      *
@@ -815,19 +837,18 @@ namespace platf::audio {
       // cause glitches for some users.
       int wanted_bits_per_sample = 32;
       auto current_default_dev = default_device(device_enum);
-      if (current_default_dev) {
-        audio::prop_t prop;
-        prop_var_t current_device_format;
-
-        if (SUCCEEDED(current_default_dev->OpenPropertyStore(STGM_READ, &prop)) && SUCCEEDED(prop->GetValue(PKEY_AudioEngine_DeviceFormat, &current_device_format.prop))) {
-          auto *format = (WAVEFORMATEXTENSIBLE *) current_device_format.prop.blob.pBlobData;
-          wanted_bits_per_sample = format->Samples.wValidBitsPerSample;
-          BOOST_LOG(info) << "Virtual audio device will use "sv << wanted_bits_per_sample << "-bit to match default device"sv;
-        }
+      if (auto format = read_device_format(current_default_dev.get())) {
+        wanted_bits_per_sample = format->Samples.wValidBitsPerSample;
+        BOOST_LOG(info) << "Virtual audio device will use "sv << wanted_bits_per_sample << "-bit to match default device"sv;
       }
 
       auto &device_id = virtual_sink_info->first;
       auto &waveformats = virtual_sink_info->second.get().virtual_sink_waveformats;
+      std::optional<WAVEFORMATEXTENSIBLE> current_sink_format;
+      device_t sink_dev;
+      if (SUCCEEDED(device_enum->GetDevice(device_id.c_str(), &sink_dev))) {
+        current_sink_format = read_device_format(sink_dev.get());
+      }
       for (const auto &waveformat : waveformats) {
         // We're using completely undocumented and unlisted API,
         // better not pass objects without copying them first.
@@ -837,6 +858,12 @@ namespace platf::audio {
 
         if (wanted_bits_per_sample != waveformat.Samples.wValidBitsPerSample) {
           continue;
+        }
+
+        // Re-applying the same format makes Windows rebuild the endpoint and drops the running game's audio session.
+        if (current_sink_format && current_sink_format->Format.nChannels == waveformat.Format.nChannels && current_sink_format->Format.nSamplesPerSec == waveformat.Format.nSamplesPerSec && current_sink_format->Format.wBitsPerSample == waveformat.Format.wBitsPerSample && current_sink_format->Samples.wValidBitsPerSample == waveformat.Samples.wValidBitsPerSample && current_sink_format->dwChannelMask == waveformat.dwChannelMask && IsEqualGUID(current_sink_format->SubFormat, waveformat.SubFormat)) {
+          BOOST_LOG(info) << "Virtual audio sink format already set to " << logging::bracket(waveformat_to_pretty_string(waveformat));
+          return device_id;
         }
 
         WAVEFORMATEXTENSIBLE p {};
