@@ -13,6 +13,7 @@
 #include <dxgi1_6.h>
 
 #include "virtual_display.h"
+#include "utils.h"
 
 using namespace SUDOVDA;
 
@@ -384,15 +385,9 @@ bool setPrimaryDisplay(const wchar_t* primaryDeviceName) {
 }
 
 bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId) {
-	UINT32 pathCount;
-	UINT32 modeCount;
-	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount)) {
-		return false;
-	}
-
-	std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
-	std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
-	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr)) {
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+	if (!query_display_config(paths, modes, true)) {
 		return false;
 	}
 

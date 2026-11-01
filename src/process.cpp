@@ -234,6 +234,8 @@ namespace proc {
     }
 
 #ifdef _WIN32
+    // Set when the virtual display exists but its device id could not be resolved (display device config enabled).
+    bool vd_name_lost = false;
     if (
       config::video.headless_mode        // Headless mode
       || launch_session->virtual_display // User requested virtual display
@@ -324,7 +326,22 @@ namespace proc {
           // So we always set output_name to the newly created virtual display as a workaround for
           // empty name when probing graphics cards.
 
-          config::video.output_name = display_device::map_display_name(this->display_name);
+          // The display device enumeration can lag behind the display creation, so retry while it is empty.
+          // Never fall back to the physical display: leave output_name as is when the id stays unknown.
+          const bool dd_enabled = config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::disabled;
+          auto device_id = display_device::map_display_name(this->display_name);
+          if (dd_enabled) {
+            for (auto delay = 20ms; device_id.empty() && delay <= 320ms; delay *= 2) {
+              std::this_thread::sleep_for(delay);
+              device_id = display_device::map_display_name(this->display_name);
+            }
+          }
+          if (!dd_enabled || !device_id.empty()) {
+            config::video.output_name = device_id;
+          } else {
+            vd_name_lost = true;
+            BOOST_LOG(warning) << "Cannot resolve device id of virtual display " << this->display_name << ", leaving display configuration untouched!";
+          }
         } else {
           BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
         }
@@ -334,7 +351,9 @@ namespace proc {
       }
     }
 
-    display_device::configure_display(config::video, *launch_session);
+    if (!vd_name_lost) {
+      display_device::configure_display(config::video, *launch_session);
+    }
 
     // We should not preserve display state when using virtual display.
     // It is already handled by Windows properly.
@@ -496,7 +515,12 @@ namespace proc {
     _app_launch_time = std::chrono::steady_clock::now();
 
   #ifdef _WIN32
-    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr]{
+    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr, requested_vd = launch_session->virtual_display]{
+      // Virtual display requested but not created: display_name is empty, never toggle HDR on a physical display.
+      if (requested_vd && !this->virtual_display) {
+        return;
+      }
+
       // Windows doesn't seem to be able to set HDR correctly when a display is just connected / changed resolution,
       // so we have tooggle HDR for the virtual display manually after a delay.
       auto retryInterval = 200ms;
@@ -770,7 +794,7 @@ namespace proc {
     // Only show the Stopped notification if we actually have an app to stop
     // Since terminate() is always run when a new app has started
     if (proc::proc.get_last_run_app_name().length() > 0 && has_run) {
-      if (used_virtual_display) {
+      if (this->virtual_display) {
         display_device::reset_persistence();
       } else {
         display_device::revert_configuration();

@@ -216,16 +216,18 @@ static const bool GetAddedDisplayName(const VIRTUAL_DISPLAY_ADD_OUT& addedDispla
 	// get all paths
 	UINT pathCount;
 	UINT modeCount;
-	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount))
+	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE, &pathCount, &modeCount))
 		return 0;
 
 	std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
 	std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
-	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr))
+	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE, &pathCount, paths.data(), &modeCount, modes.data(), nullptr))
 		return 0;
 
 	auto path = std::find_if(paths.begin(), paths.end(), [&addedDisplay](DISPLAYCONFIG_PATH_INFO _path) {
-		return _path.targetInfo.id == addedDisplay.TargetId;
+		return _path.targetInfo.id == addedDisplay.TargetId
+			&& _path.targetInfo.adapterId.LowPart == addedDisplay.AdapterLuid.LowPart
+			&& _path.targetInfo.adapterId.HighPart == addedDisplay.AdapterLuid.HighPart;
 	});
 
 	if (path == paths.end()) {
