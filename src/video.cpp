@@ -1117,7 +1117,7 @@ namespace video {
 
     const auto select_display = [&](const std::string &name) {
       for (int x = 0; x < display_names.size(); ++x) {
-        if (display_names[x] == name) {
+        if (!name.empty() && display_names[x] == name) {
           current_display_index = x;
           return true;
         }
