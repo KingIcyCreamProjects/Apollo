@@ -1452,6 +1452,16 @@ namespace nvhttp {
           launch_session->input_only = true;
         }
 
+        if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display()) {
+          BOOST_LOG(warning) << "Virtual display is gone, terminating app so the client relaunches"sv;
+          proc::proc.terminate();
+          tree.put("root.resume", 0);
+          tree.put("root.<xmlattr>.status_code", 503);
+          tree.put("root.<xmlattr>.status_message", "Virtual display lost, please launch again");
+
+          return;
+        }
+
         if (no_active_sessions && !proc::proc.virtual_display) {
           display_device::configure_display(config::video, *launch_session);
           if (video::probe_encoders()) {
@@ -1578,6 +1588,16 @@ namespace nvhttp {
     if (config::input.enable_input_only_mode && current_appid == proc::input_only_app_id) {
       launch_session->input_only = true;
     }
+
+      if (no_active_sessions && proc::proc.virtual_display && !proc::proc.resume_virtual_display()) {
+        BOOST_LOG(warning) << "Virtual display is gone, terminating app so the client relaunches"sv;
+        proc::proc.terminate();
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "Virtual display lost, please launch again");
+
+        return;
+      }
 
     if (no_active_sessions && !proc::proc.virtual_display) {
       // We want to prepare display only if there are no active sessions

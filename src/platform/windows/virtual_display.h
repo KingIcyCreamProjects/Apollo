@@ -45,4 +45,5 @@ namespace VDISPLAY {
 	bool removeVirtualDisplay(const GUID& guid);
 
 	std::vector<std::wstring> matchDisplay(std::wstring sMatch);
+	bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId);
 }

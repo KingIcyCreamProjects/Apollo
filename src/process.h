@@ -137,6 +137,10 @@ namespace proc {
     std::string get_running_app_uuid();
     boost::process::v1::environment get_env();
     void resume();
+    /**
+     * @return false if the virtual display of the running app no longer exists and the app cannot be resumed
+     */
+    bool resume_virtual_display();
     void pause();
     void terminate(bool immediate = false, bool needs_refresh = true);
 
