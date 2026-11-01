@@ -75,10 +75,6 @@ namespace crypto {
       }
 
       err_code = X509_STORE_CTX_get_error(_cert_ctx.get());
-
-      if (err_code != X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT && err_code != X509_V_ERR_INVALID_CA) {
-        return X509_verify_cert_error_string(err_code);
-      }
     }
 
     return X509_verify_cert_error_string(err_code);
