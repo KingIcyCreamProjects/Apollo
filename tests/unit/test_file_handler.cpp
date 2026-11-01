@@ -94,3 +94,30 @@ TEST(FileHandlerTests, ReadMissingFileTest) {
   // read missing file
   EXPECT_EQ(file_handler::read_file("non-existing-file.txt"), "");
 }
+
+TEST(FileHandlerWriteFileTest, OverwriteExisting) {
+  const auto dir = std::filesystem::temp_directory_path() / "apollo_write_file_test";
+  std::filesystem::create_directories(dir);
+  const auto file = (dir / "out.txt").string();
+
+  ASSERT_EQ(file_handler::write_file(file.c_str(), "old"), 0);
+  ASSERT_EQ(file_handler::write_file(file.c_str(), "new"), 0);
+  EXPECT_EQ(file_handler::read_file(file.c_str()), "new");
+  EXPECT_FALSE(std::filesystem::exists(file + ".tmp"));
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST(FileHandlerWriteFileTest, FailureKeepsOldContent) {
+  const auto dir = std::filesystem::temp_directory_path() / "apollo_write_file_test2";
+  std::filesystem::create_directories(dir);
+  const auto file = (dir / "out.txt").string();
+  ASSERT_EQ(file_handler::write_file(file.c_str(), "old"), 0);
+
+  // A directory in the way of the temp file makes the write fail.
+  std::filesystem::create_directories(file + ".tmp");
+  EXPECT_EQ(file_handler::write_file(file.c_str(), "new"), -1);
+  EXPECT_EQ(file_handler::read_file(file.c_str()), "old");
+
+  std::filesystem::remove_all(dir);
+}

@@ -71,3 +71,14 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(URL_2, "hello-redirect.txt")
   )
 );
+
+TEST(SaveUserCredsTest, InvalidJsonFails) {
+  const auto dir = std::filesystem::temp_directory_path() / "apollo_creds_test";
+  std::filesystem::create_directories(dir);
+  const auto file = (dir / "creds.json").string();
+  {
+    std::ofstream(file) << "not json";
+  }
+  EXPECT_EQ(http::save_user_creds(file, "u", "p"), -1);
+  std::filesystem::remove_all(dir);
+}
