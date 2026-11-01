@@ -8,6 +8,7 @@
  #define BOOST_PROCESS_VERSION 1
 #endif
 // standard includes
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -179,7 +180,17 @@ namespace proc {
     return {render_width, render_height};
   }
 
-  int virtual_display_fps(int fps, bool double_refreshrate) {
+  bool display_rate_matches(uint32_t display_hz, int target_fps) {
+    // Windows reports whole hertz, so 119.88 reads as 119 or 120, but a full hertz off is another mode like 119 for 120.
+    return std::abs((int) display_hz * 1000 - target_fps) < 1000;
+  }
+
+#ifdef _WIN32
+  /**
+   * @brief Calculate the refresh rate of the virtual display for a client mode.
+   * @return The rate in millihertz, doubled when double_refreshrate is set.
+   */
+  static int virtual_display_fps(int fps, bool double_refreshrate) {
     int target_fps = fps ? fps : 60000;
 
     if (target_fps < 1000) {
@@ -193,7 +204,6 @@ namespace proc {
     return target_fps;
   }
 
-#ifdef _WIN32
   bool proc_t::create_virtual_display(const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session, uint32_t render_width, uint32_t render_height) {
     if (vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
       // Try init driver again
@@ -382,10 +392,29 @@ namespace proc {
     }
 
     // Removing a display can disturb the running app, so a new rate only recreates when the mode change fails.
-    // The display configuration is not rerun here, so a manual refresh rate comes back on the next launch.
-    if (same_size && VDISPLAY::changeDisplaySettings(platf::from_utf8(display_name).c_str(), render_width, render_height, virtual_display_fps(launch_session.fps, config::video.double_refreshrate)) == ERROR_SUCCESS) {
-      _launch_session->fps = launch_session.fps;
-      return true;
+    // Success from changeDisplaySettings can mean it reapplied the old mode, so only the rate read back counts.
+    if (same_size) {
+      const auto display_name_w = platf::from_utf8(display_name);
+      const int target_fps = virtual_display_fps(launch_session.fps, config::video.double_refreshrate);
+      DEVMODEW devMode {};
+      if (
+        VDISPLAY::changeDisplaySettings(display_name_w.c_str(), render_width, render_height, target_fps) == ERROR_SUCCESS &&
+        VDISPLAY::getDeviceSettings(display_name_w.c_str(), devMode) &&
+        display_rate_matches(devMode.dmDisplayFrequency, target_fps)
+      ) {
+        _launch_session->fps = launch_session.fps;
+
+        // Rerun the display configuration so a manual refresh rate or a remapped mode replaces the raw client rate, same as a recreate.
+        // Without a resolved device id output_name may not be this display, so leave the configuration untouched.
+        if (const auto id = display_device::map_display_name(display_name); !id.empty() && id == config::video.output_name) {
+          launch_session.width = render_width;
+          launch_session.height = render_height;
+          display_device::configure_display(config::video, launch_session);
+          display_device::reset_persistence();
+        }
+
+        return true;
+      }
     }
 
     BOOST_LOG(info) << "Recreating virtual display for client mode " << render_width << 'x' << render_height;

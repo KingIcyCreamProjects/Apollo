@@ -24,10 +24,16 @@ TEST(RenderSize, ScaledSizeIsEven) {
   EXPECT_EQ(proc::render_size(1002, 2000, 125), size_pair(1252, 2500));
 }
 
-// A resume applies this rate to the existing display, so it must match what the display was created with.
-TEST(VirtualDisplayFps, MatchesCreateRules) {
-  EXPECT_EQ(proc::virtual_display_fps(120000, false), 120000);
-  EXPECT_EQ(proc::virtual_display_fps(120000, true), 240000);
-  EXPECT_EQ(proc::virtual_display_fps(0, false), 60000);
-  EXPECT_EQ(proc::virtual_display_fps(60, false), 60000);
+// A resume keeps the existing display only when this holds, so a display left on another mode must not match.
+TEST(DisplayRateMatches, RejectsAnotherMode) {
+  EXPECT_TRUE(proc::display_rate_matches(120, 120000));
+  EXPECT_FALSE(proc::display_rate_matches(60, 120000));
+  EXPECT_FALSE(proc::display_rate_matches(119, 120000));
+}
+
+// Windows reports whole hertz, so a fractional rate can read back on either side.
+TEST(DisplayRateMatches, AcceptsFractionalRateInWholeHertz) {
+  EXPECT_TRUE(proc::display_rate_matches(119, 119880));
+  EXPECT_TRUE(proc::display_rate_matches(120, 119880));
+  EXPECT_TRUE(proc::display_rate_matches(59, 59940));
 }
