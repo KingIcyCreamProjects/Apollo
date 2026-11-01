@@ -368,7 +368,8 @@ namespace proc {
       return true;
     }
 
-    if (is_changing_settings_going_to_fail()) {
+    // View permission is enough to resume, but replacing the display under the running app needs launch permission.
+    if (!(launch_session.perm & crypto::PERM::launch) || is_changing_settings_going_to_fail()) {
       // Fail open when the CCD API is inaccessible (e.g. locked desktop): display state is unknown, not lost.
       return found || test_no_access_to_ccd_api();
     }

@@ -139,6 +139,7 @@ namespace proc {
     void resume();
     /**
      * @brief Recreate the virtual display of the running app when it is gone or the client mode changed its size.
+     * A client without the launch permission only checks that the display still exists.
      * @param launch_session The resuming session, its size is set to the scaled size when the display is recreated.
      * @return false if the virtual display of the running app no longer exists and the app cannot be resumed
      */
