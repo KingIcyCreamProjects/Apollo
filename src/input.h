@@ -71,6 +71,17 @@ namespace input {
      * @return The batching result.
      */
     batch_result_e batch_packets(std::vector<std::uint8_t> &dest, std::vector<std::uint8_t> &src);
+
+    /// Divert platform keyboard and mouse button output to recorders; empty functions restore the platform.
+    void set_sinks(std::function<void(uint16_t, bool, uint8_t)> keyboard, std::function<void(int, bool)> mouse);
+    std::shared_ptr<input_t> alloc_input();
+    void send_keyboard_packet(std::shared_ptr<input_t> &input, std::uint16_t key_code, std::uint8_t modifiers, bool release);
+    void send_mouse_button_packet(std::shared_ptr<input_t> &input, int button, bool release);
+    /// Body of the task reset() queues.
+    void release_held(bool release_left);
+    void clear_key_state();
+    /// Run reset(), then the tasks it queued (no pool thread runs in tests).
+    void reset_and_drain(std::shared_ptr<input_t> &input);
   }  // namespace testing
 #endif
 }  // namespace input
