@@ -6,8 +6,14 @@
 #include "../tests_common.h"
 
 #include <src/config.h>
+#include <src/httpcommon.h>
 #include <src/nvhttp.h>
+#include <src/uuid.h>
 
+#include <algorithm>
+#include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <thread>
 
@@ -481,4 +487,194 @@ TEST_F(PairingSessionTest, SessionCountIsCapped) {
 
   // A retry frees its own slot first
   EXPECT_NE(start_pair_session(request_args(CERT_HEX, SALT), "0", tree), nullptr);
+}
+
+class ClientAuthStateTest: public testing::Test {
+protected:
+  void SetUp() override {
+    std::filesystem::create_directories(dir);
+    config::nvhttp.file_state = state_file.string();
+    config::sunshine.flags.reset(config::flag::FRESH_STATE);
+    http::unique_id = uuid_util::uuid_t::generate().string();
+
+    // Clients left in memory by the pairing tests
+    erase_all_clients();
+
+    add_authorized_client(make_client(other_cert()));
+    target = make_client(PUBLIC_CERT);
+    add_authorized_client(target);
+    ASSERT_TRUE(trusted(PUBLIC_CERT));
+    ASSERT_TRUE(trusted(other_cert()));
+  }
+
+  void TearDown() override {
+    erase_all_clients();
+    config::nvhttp.file_state = original_file_state;
+    config::sunshine.flags = original_flags;
+    http::unique_id = original_unique_id;
+    http::uuid = original_uuid;
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+  }
+
+  // Generating a key is slow, and one is enough for every test
+  static const std::string &other_cert() {
+    static const std::string cert = crypto::gen_creds("other", 2048).x509;
+    return cert;
+  }
+
+  static crypto::p_named_cert_t make_client(const std::string &cert) {
+    auto client = std::make_shared<crypto::named_cert_t>();
+    client->name = "test";
+    client->cert = cert;
+    client->uuid = uuid_util::uuid_t::generate().string();
+    return client;
+  }
+
+  static bool trusted(const std::string &cert) {
+    crypto::p_named_cert_t named_cert;
+    return verify_client_cert(crypto::x509(cert).get(), named_cert) == nullptr;
+  }
+
+  void damage_state_file() const {
+    std::ofstream(state_file) << "{ not json";
+  }
+
+  // file_handler::write_file writes to this path first. The state file stays valid and holds the old clients.
+  void block_state_writes() const {
+    std::filesystem::create_directory(state_file.string() + ".tmp");
+  }
+
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("apollo-client-auth-" + uuid_util::uuid_t::generate().string());
+  const std::filesystem::path state_file = dir / "state.json";
+  const std::string original_file_state = config::nvhttp.file_state;
+  const decltype(config::sunshine.flags) original_flags = config::sunshine.flags;
+  const std::string original_unique_id = http::unique_id;
+  const uuid_util::uuid_t original_uuid = http::uuid;
+  crypto::p_named_cert_t target;
+};
+
+TEST_F(ClientAuthStateTest, UnpairSavesAndRevokes) {
+  EXPECT_TRUE(unpair_client(target->uuid));
+  EXPECT_FALSE(trusted(PUBLIC_CERT));
+  EXPECT_TRUE(trusted(other_cert()));
+
+  load_state();
+  EXPECT_FALSE(trusted(PUBLIC_CERT));
+  EXPECT_EQ(get_all_clients().size(), 1u);
+}
+
+TEST_F(ClientAuthStateTest, UnpairWithDamagedFileRevokesAndFails) {
+  damage_state_file();
+
+  EXPECT_FALSE(unpair_client(target->uuid));
+  EXPECT_FALSE(trusted(PUBLIC_CERT));
+  EXPECT_TRUE(trusted(other_cert()));
+  EXPECT_EQ(get_all_clients().size(), 1u);
+}
+
+TEST_F(ClientAuthStateTest, UnpairWithFailedWriteRevokesAndFails) {
+  block_state_writes();
+
+  EXPECT_FALSE(unpair_client(target->uuid));
+  EXPECT_FALSE(trusted(PUBLIC_CERT));
+  EXPECT_TRUE(trusted(other_cert()));
+  EXPECT_EQ(get_all_clients().size(), 1u);
+}
+
+TEST_F(ClientAuthStateTest, EraseAllWithFailedWriteRevokes) {
+  block_state_writes();
+
+  EXPECT_FALSE(erase_all_clients());
+
+  EXPECT_FALSE(trusted(PUBLIC_CERT));
+  EXPECT_FALSE(trusted(other_cert()));
+  EXPECT_TRUE(get_all_clients().empty());
+}
+
+TEST_F(ClientAuthStateTest, UpdateWithFailedWriteChangesInMemoryAndFails) {
+  block_state_writes();
+
+  EXPECT_FALSE(update_device_info(target->uuid, "renamed", "", {}, {}, crypto::PERM::_no, true, true, false));
+
+  auto clients = get_all_clients();
+  auto client = std::find_if(clients.begin(), clients.end(), [this](const auto &node) {
+    return node["uuid"] == target->uuid;
+  });
+  ASSERT_TRUE(client != clients.end());
+  EXPECT_EQ((*client)["name"].get<std::string>(), "renamed");
+  EXPECT_EQ((*client)["perm"].get<uint32_t>(), static_cast<uint32_t>(crypto::PERM::_no));
+}
+
+TEST_F(ClientAuthStateTest, AddWithDamagedFileTrustsInMemory) {
+  ASSERT_TRUE(unpair_client(target->uuid));
+  damage_state_file();
+
+  add_authorized_client(make_client(PUBLIC_CERT));
+
+  EXPECT_TRUE(trusted(PUBLIC_CERT));
+  EXPECT_EQ(get_all_clients().size(), 2u);
+}
+
+TEST_F(ClientAuthStateTest, AddWithFailedWriteTrustsInMemory) {
+  ASSERT_TRUE(unpair_client(target->uuid));
+  block_state_writes();
+
+  add_authorized_client(make_client(PUBLIC_CERT));
+
+  EXPECT_TRUE(trusted(PUBLIC_CERT));
+  EXPECT_EQ(get_all_clients().size(), 2u);
+}
+
+TEST_F(ClientAuthStateTest, SaveStateReportsFailure) {
+  EXPECT_TRUE(save_state());
+
+  block_state_writes();
+  EXPECT_FALSE(save_state());
+  std::filesystem::remove(state_file.string() + ".tmp");
+
+  damage_state_file();
+  EXPECT_FALSE(save_state());
+}
+
+TEST_F(ClientAuthStateTest, LoadStateWithDamagedFileKeepsClientsAndGetsId) {
+  damage_state_file();
+  http::unique_id.clear();
+
+  load_state();
+
+  EXPECT_FALSE(http::unique_id.empty());
+  EXPECT_TRUE(trusted(PUBLIC_CERT));
+  EXPECT_EQ(get_all_clients().size(), 2u);
+}
+
+TEST_F(ClientAuthStateTest, VerifyDuringStateReloads) {
+  std::atomic<bool> done {false};
+
+  auto verify_until_done = [&done]() {
+    while (!done) {
+      trusted(PUBLIC_CERT);
+      trusted(other_cert());
+      get_all_clients();
+    }
+  };
+  std::thread verify_a {verify_until_done};
+  std::thread verify_b {verify_until_done};
+
+  // The other client stays, so unpair never reaches proc::proc.terminate
+  auto client = target;
+  for (int i = 0; i < 100; ++i) {
+    unpair_client(client->uuid);
+    client = make_client(PUBLIC_CERT);
+    add_authorized_client(client);
+  }
+
+  done = true;
+  verify_a.join();
+  verify_b.join();
+
+  EXPECT_TRUE(trusted(PUBLIC_CERT));
+  EXPECT_TRUE(trusted(other_cert()));
+  EXPECT_EQ(get_all_clients().size(), 2u);
 }

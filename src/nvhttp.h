@@ -244,8 +244,39 @@ namespace nvhttp {
   std::string request_otp(const std::string& passphrase, const std::string& deviceName);
 
   /**
+   * @brief Write the paired clients to the state file.
+   * @details The caller holds the client state lock, or is a single-threaded test.
+   * @return Whether the state file was written.
+   */
+  bool save_state();
+
+  /**
+   * @brief Load the paired clients from the state file.
+   * @details The caller holds the client state lock, or is a single-threaded test.
+   * A file that can't be parsed leaves the clients in memory as they are.
+   */
+  void load_state();
+
+  /**
+   * @brief Trust a client and save it to the state file.
+   * @details A failed save still trusts the client until the host restarts.
+   * @param named_cert_p The client to add.
+   */
+  void add_authorized_client(const crypto::p_named_cert_t &named_cert_p);
+
+  /**
+   * @brief Check a client certificate against the paired clients.
+   * @param cert The certificate to verify.
+   * @param named_cert_out The matching paired client.
+   * @return nullptr if the certificate is trusted, otherwise an error string.
+   */
+  const char *verify_client_cert(crypto::x509_t::element_type *cert, crypto::p_named_cert_t &named_cert_out);
+
+  /**
    * @brief Remove single client.
+   * @details The client stops being trusted even when the state file can't be written.
    * @param uuid The UUID of the client to remove.
+   * @return Whether a client was removed and the state file was written.
    * @examples
    * nvhttp::unpair_client("4D7BB2DD-5704-A405-B41C-891A022932E1");
    * @examples_end
@@ -263,11 +294,13 @@ namespace nvhttp {
 
   /**
    * @brief Remove all paired clients.
+   * @details The clients stop being trusted even when the state file can't be written.
+   * @return Whether the state file was written.
    * @examples
    * nvhttp::erase_all_clients();
    * @examples_end
    */
-  void erase_all_clients();
+  bool erase_all_clients();
 
   /**
    * @brief      Stops a session.

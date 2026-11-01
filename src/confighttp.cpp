@@ -993,10 +993,10 @@ namespace confighttp {
 
     print_req(request);
 
-    nvhttp::erase_all_clients();
+    bool saved = nvhttp::erase_all_clients();
     proc::proc.terminate();
     nlohmann::json output_tree;
-    output_tree["status"] = true;
+    output_tree["status"] = saved;
     send_response(response, output_tree);
   }
 
