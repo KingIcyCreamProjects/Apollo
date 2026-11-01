@@ -331,9 +331,16 @@ namespace nvhttp {
       return;
     }
 
-    std::string uid = tree["root"]["uniqueid"];
-    http::uuid = uuid_util::uuid_t::parse(uid);
-    http::unique_id = uid;
+    // load_state runs on a bare thread, so a throw from a damaged id would end the process
+    try {
+      std::string uid = tree["root"]["uniqueid"];
+      http::uuid = uuid_util::uuid_t::parse(uid);
+      http::unique_id = uid;
+    } catch (std::exception &e) {
+      BOOST_LOG(error) << "Invalid uniqueid in "sv << config::nvhttp.file_state << ": "sv << e.what();
+      http::uuid = uuid_util::uuid_t::generate();
+      http::unique_id = http::uuid.string();
+    }
 
     nlohmann::json root = tree["root"];
     client_t client;  // Local client to load into
