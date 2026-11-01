@@ -213,6 +213,13 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
     return;
   }
 
+  // Record launch failures and child exits in the shared log so crash loops are visible
+  auto log_event = [&](const std::string &msg) {
+    auto line = "[sunshinesvc] " + msg + "\r\n";
+    DWORD written;
+    WriteFile(log_file_handle, line.data(), (DWORD) line.size(), &written, nullptr);
+  };
+
   // We can use a single STARTUPINFOEXW for all the processes that we launch
   STARTUPINFOEXW startup_info = {};
   startup_info.StartupInfo.cb = sizeof(startup_info);
@@ -265,6 +272,7 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
 
     PROCESS_INFORMATION process_info;
     if (!CreateProcessAsUserW(console_token, L"Sunshine.exe", nullptr, nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, (LPSTARTUPINFOW) &startup_info, &process_info)) {
+      log_event(std::format("CreateProcessAsUserW failed: {}", GetLastError()));
       CloseHandle(console_token);
       CloseHandle(job_handle);
       continue;
@@ -298,9 +306,12 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
             // Sunshine terminated itself.
 
             DWORD exit_code;
-            if (GetExitCodeProcess(process_info.hProcess, &exit_code) && exit_code == ERROR_SHUTDOWN_IN_PROGRESS) {
-              // Sunshine is asking for us to shut down, so gracefully stop ourselves.
-              SetEvent(stop_event);
+            if (GetExitCodeProcess(process_info.hProcess, &exit_code)) {
+              log_event(std::format("Sunshine.exe exited with code {}", exit_code));
+              if (exit_code == ERROR_SHUTDOWN_IN_PROGRESS) {
+                // Sunshine is asking for us to shut down, so gracefully stop ourselves.
+                SetEvent(stop_event);
+              }
             }
             still_running = false;
             break;
