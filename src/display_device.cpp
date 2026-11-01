@@ -369,8 +369,8 @@ namespace display_device {
         case refresh_rate_option_e::automatic:
           {
             if (session.fps >= 0) {
-              // session.fps is in millihertz. The virtual display was created at double this rate, keep it that way.
-              const auto fps = static_cast<unsigned int>(session.fps) * (video_config.double_refreshrate && proc::proc.virtual_display ? 2 : 1);
+              // session.fps is in millihertz.
+              const auto fps = static_cast<unsigned int>(session.fps);
               config.m_refresh_rate = fps % 1000 == 0 ? Rational {fps / 1000, 1} : Rational {fps, 1000};
             } else {
               BOOST_LOG(error) << "FPS value provided by client session config is invalid: " << session.fps;
@@ -512,6 +512,7 @@ namespace display_device {
      * @brief Remap the the requested display mode based on the config.
      * @param video_config User's video related configuration.
      * @param session Session information.
+     * @param requested_refresh_rate Parsed refresh rate to match `requested_fps` against, before any doubling.
      * @param config A reference to a config object that will be modified on success.
      * @returns True if the remapping was performed or skipped, false if remapping has failed due to invalid config.
      *
@@ -520,10 +521,10 @@ namespace display_device {
      * const config::video_t &video_config { config::video };
      *
      * SingleDisplayConfiguration config;
-     * const bool success = remap_display_mode_if_needed(video_config, *launch_session, config);
+     * const bool success = remap_display_mode_if_needed(video_config, *launch_session, config.m_refresh_rate, config);
      * @examples_end
      */
-    bool remap_display_mode_if_needed(const config::video_t &video_config, const rtsp_stream::launch_session_t &session, SingleDisplayConfiguration &config) {
+    bool remap_display_mode_if_needed(const config::video_t &video_config, const rtsp_stream::launch_session_t &session, const std::optional<FloatingPoint> &requested_refresh_rate, SingleDisplayConfiguration &config) {
       const auto remapping_type {determine_remapping_type(video_config)};
       if (!remapping_type) {
         return true;
@@ -588,8 +589,8 @@ namespace display_device {
           continue;
         }
 
-        // Note: at this point config should already have parsed refresh rate set.
-        if (parsed_entry->requested_fps && parsed_entry->requested_fps != config.m_refresh_rate) {
+        // Note: config already holds the doubled refresh rate here, entries are matched against the one before doubling.
+        if (parsed_entry->requested_fps && parsed_entry->requested_fps != requested_refresh_rate) {
           BOOST_LOG(verbose) << "Skipping remapping because requested FPS do not match! Entry:\n"
                              << entry_to_string(entry);
           continue;
@@ -869,7 +870,15 @@ namespace display_device {
       return failed_to_parse_tag_t {};
     }
 
-    if (!remap_display_mode_if_needed(video_config, session, config)) {
+    const auto requested_refresh_rate {config.m_refresh_rate};
+
+    // The virtual display was created at double the client rate, keep it that way.
+    // A final refresh rate from a remapping entry replaces this and is used as written.
+    if (video_config.dd.refresh_rate_option == config::video_t::dd_t::refresh_rate_option_e::automatic && video_config.double_refreshrate && proc::proc.virtual_display) {
+      std::get<Rational>(*config.m_refresh_rate).m_numerator *= 2;
+    }
+
+    if (!remap_display_mode_if_needed(video_config, session, requested_refresh_rate, config)) {
       // Error already logged
       return failed_to_parse_tag_t {};
     }
