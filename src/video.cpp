@@ -1903,6 +1903,28 @@ namespace video {
     return nullptr;
   }
 
+  bool encode_limiter_needed(const config_t &config) {
+    return config.framerate * 1000 >= config.encodingFramerate * 3 / 2;
+  }
+
+  bool encode_limiter_t::admit(std::chrono::steady_clock::time_point &ts) {
+    auto time_diff = ts - slot;
+
+    // If new frame comes in way too fast, just drop
+    if (time_diff < -tolerance) {
+      return false;
+    }
+
+    if (time_diff < tolerance) {
+      ts = slot;
+    } else {
+      slot = ts;
+    }
+
+    slot += interval;
+    return true;
+  }
+
   void encode_run(
     int &frame_nr,  // Store progress of the frame number
     safe::mail_t mail,
@@ -1916,6 +1938,8 @@ namespace video {
   ) {
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
     if (!session) {
+      // Callers retry immediately; don't spin while the encoder keeps failing
+      std::this_thread::sleep_for(100ms);
       return;
     }
 
@@ -1940,8 +1964,8 @@ namespace video {
     double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target * 1000 : std::max(config.encodingFramerate / 5, 10000);
     auto max_frametime = std::chrono::nanoseconds(1000ms) * 1000 / minimum_fps_target;
     auto encode_frame_threshold = std::chrono::nanoseconds(1000ms) * 1000 / config.encodingFramerate;
-    auto frame_variation_threshold = encode_frame_threshold / 4;
-    auto min_frame_diff = encode_frame_threshold - frame_variation_threshold;
+    encode_limiter_t limiter {{}, encode_frame_threshold, encode_frame_threshold / 4};
+    const bool limit = encode_limiter_needed(config);
     BOOST_LOG(info) << "Minimum FPS target set to ~"sv << (minimum_fps_target / 2000) << "fps ("sv << max_frametime * 2 << ")"sv;
     BOOST_LOG(info) << "Encoding Frame threshold: "sv << encode_frame_threshold;
 
@@ -1979,21 +2003,9 @@ namespace video {
       }
     }
 
-    std::chrono::steady_clock::time_point encode_frame_timestamp;
     bool missing_frame_timestamp_warning_logged = false;
 
     while (true) {
-      // Break out of the encoding loop if any of the following are true:
-      // a) The stream is ending
-      // b) Sunshine is quitting
-      // c) The capture side is waiting to reinit and we've encoded at least one frame
-      //
-      // If we have to reinit before we have received any captured frames, we will encode
-      // the blank dummy frame just to let Moonlight know that we're alive.
-      if (shutdown_event->peek() || !images->running() || (reinit_event.peek() && frame_nr > 1)) {
-        break;
-      }
-
       bool requested_idr_frame = false;
 
       while (invalidate_ref_frames_events->peek()) {
@@ -2025,11 +2037,7 @@ namespace video {
             frame_timestamp = std::chrono::steady_clock::now();
           }
 
-          auto current_timestamp = *frame_timestamp;
-          auto time_diff = current_timestamp - encode_frame_timestamp;
-
-          // If new frame comes in way too fast, just drop
-          if (time_diff < -frame_variation_threshold) {
+          if (limit && !limiter.admit(*frame_timestamp)) {
             continue;
           }
 
@@ -2037,17 +2045,22 @@ namespace video {
             BOOST_LOG(error) << "Could not convert image"sv;
             break;
           }
-
-          if (time_diff < frame_variation_threshold) {
-            *frame_timestamp = encode_frame_timestamp;
-          } else {
-            encode_frame_timestamp = current_timestamp;
-          }
-
-          encode_frame_timestamp += encode_frame_threshold;
         } else if (!images->running()) {
           break;
         }
+      }
+
+      // Break out of the encoding loop if any of the following are true:
+      // a) The stream is ending
+      // b) Sunshine is quitting
+      // c) The capture side is waiting to reinit and we've encoded at least one frame
+      //
+      // If we have to reinit before we have received any captured frames, we will encode
+      // the blank dummy frame just to let Moonlight know that we're alive.
+      //
+      // Check as close as possible to the encode call so no packets are in flight after encoder teardown.
+      if (shutdown_event->peek() || !images->running() || (reinit_event.peek() && frame_nr > 1)) {
+        break;
       }
 
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
@@ -2401,11 +2414,11 @@ namespace video {
       std::shared_ptr<platf::display_t> display;
       {
         auto lg = ref->display_wp.lock();
-        if (ref->display_wp->expired()) {
-          continue;
-        }
-
         display = ref->display_wp->lock();
+      }
+      if (!display) {
+        std::this_thread::sleep_for(1ms);
+        continue;
       }
 
       auto &encoder = *chosen_encoder;

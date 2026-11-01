@@ -48,3 +48,31 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(EncoderTest, ValidateEncoder) {
   // todo:: test something besides fixture setup
 }
+
+TEST(EncodeLimiter, NeededOnlyForWarp) {
+  video::config_t cfg {};
+  cfg.framerate = 120;
+  cfg.encodingFramerate = 120000;
+  EXPECT_FALSE(video::encode_limiter_needed(cfg));
+  cfg.framerate = 240;
+  EXPECT_TRUE(video::encode_limiter_needed(cfg));
+  cfg.encodingFramerate = 60000;
+  EXPECT_TRUE(video::encode_limiter_needed(cfg));
+}
+
+TEST(EncodeLimiter, WarpSeriesKeepsTargetRate) {
+  using namespace std::chrono;
+  const auto interval = nanoseconds(1000ms) / 60;
+  video::encode_limiter_t limiter {{}, interval, interval / 4};
+  const auto base = steady_clock::time_point {} + 1s;
+  int admitted = 0;
+  // one second of a 240 fps capture
+  for (int i = 0; i < 240; ++i) {
+    auto ts = base + nanoseconds(1000ms) * i / 240;
+    if (limiter.admit(ts)) {
+      ++admitted;
+    }
+  }
+  EXPECT_GE(admitted, 58);
+  EXPECT_LE(admitted, 62);
+}
