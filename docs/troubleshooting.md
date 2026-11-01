@@ -250,7 +250,7 @@ user logs in, so a stream can show the login screen.
 
 ### Adapter Name on a host with an integrated GPU
 On a host with a discrete and an integrated GPU, set `adapter_name` to the discrete GPU name so that capture and the
-virtual display use the same GPU as the encoder. Run `%ProgramFiles%Apollo	oolsdxgi-info.exe` to list the names.
+virtual display use the same GPU as the encoder. Run `%ProgramFiles%\Apollo\tools\dxgi-info.exe` to list the names.
 
 ### Built-in Virtual Display app
 The built-in Virtual Display app does not run global prep commands, detached commands or client commands. This is
@@ -258,7 +258,7 @@ deliberate, so a failing command cannot block the fallback display. To get them,
 **Always create virtual display** turned on, and use it instead.
 
 ### Log files
-Apollo writes `sunshine.log` in the config folder, `%ProgramFiles%Apolloconfig`. Starting Apollo again moves the
+Apollo writes `sunshine.log` in the config folder, `%ProgramFiles%\Apollo\config`. Starting Apollo again moves the
 previous log to `sunshine.log.backup` and replaces any older backup, so copy it first if you need to keep it.
 
 ### Stuttering

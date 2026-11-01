@@ -334,13 +334,13 @@ overflow menu. Different versions of Windows may provide slightly different step
    Install:
    ```bash
    cd /d {path to extracted directory}
-   scripts/install-gamepad.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-gamepad.ps1
    ```
 
    Uninstall:
    ```bash
    cd /d {path to extracted directory}
-   scripts/uninstall-gamepad.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall-gamepad.ps1
    ```
 
 5. Windows service
@@ -461,7 +461,7 @@ Sunshine is configured via the web ui, which is available on [https://localhost:
 by default. You may replace *localhost* with your internal ip address.
 
 > [!NOTE]
-> On Windows the configuration, including pairing state, is stored in `%ProgramFiles%Apolloconfig`. Include it in
+> On Windows the configuration, including pairing state, is stored in `%ProgramFiles%\Apollo\config`. Include it in
 > your backups.
 
 > [!NOTE]

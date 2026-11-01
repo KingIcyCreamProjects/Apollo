@@ -254,6 +254,7 @@
     "ds4_back_as_touchpad_click": "Map Back/Select to Touchpad Click",
     "ds4_back_as_touchpad_click_desc": "When forcing DS4 emulation, map Back/Select to Touchpad Click",
     "ds5_inputtino_randomize_mac": "Randomize DS5 controller MAC address",
+    "ds5_inputtino_randomize_mac_desc": "Use a random MAC address for each emulated DS5 controller instead of a fixed one.",
     "enable_discovery": "Enable Auto Discovery",
     "enable_discovery_desc": "When disabled, you'll need to manually enter host IP on the client to pair.",
     "enable_input_only_mode": "Enable Input Only Mode",

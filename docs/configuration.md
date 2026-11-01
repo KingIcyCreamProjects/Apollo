@@ -2264,8 +2264,8 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Continue starting when probing for encoders fails, for example when a laptop GPU is asleep. Streaming fails if no
-            encoder is available.
+            Continue launching an app when the encoder probe before a stream fails. This option does not affect the encoder
+            probe at host startup. Streaming fails if no encoder is available.
         </td>
     </tr>
     <tr>
