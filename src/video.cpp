@@ -1922,6 +1922,14 @@ namespace video {
     return nullptr;
   }
 
+  config_t resolve_dynamic_range(const encoder_t &encoder, config_t config) {
+    if (config.dynamicRange && !encoder.codec_from_config(config)[encoder_t::DYNAMIC_RANGE]) {
+      BOOST_LOG(warning) << encoder.codec_from_config(config).name << ": dynamic range not supported, falling back to SDR"sv;
+      config.dynamicRange = 0;
+    }
+    return config;
+  }
+
   bool encode_limiter_needed(const config_t &config) {
     return config.framerate * 1000 >= config.encodingFramerate * 3 / 2;
   }
@@ -2480,6 +2488,8 @@ namespace video {
     config_t config,
     void *channel_data
   ) {
+    config = resolve_dynamic_range(*chosen_encoder, config);
+
     auto idr_events = mail->event<bool>(mail::idr);
 
     idr_events->raise(true);
