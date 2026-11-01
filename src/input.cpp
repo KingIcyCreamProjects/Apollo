@@ -177,11 +177,21 @@ namespace input {
         accumulated_hscroll_delta {} {
     }
 
+    ~input_t() {
+      // Reset inside the task: the capture would otherwise live on in the future's shared state and
+      // could be destroyed on this thread instead of the pool thread.
+      task_pool.push([context = std::move(client_context)]() mutable {
+        context.reset();
+      });
+    }
+
     // Keep track of alt+ctrl+shift key combo
     int shortcutFlags;
 
     std::vector<gamepad_t> gamepads;
-    std::unique_ptr<platf::client_input_t> client_context;
+    // Shared so the destructor can hand it to the task pool, which serialises its destruction against
+    // touch/pen repeat tasks that still hold a raw pointer to it.
+    std::shared_ptr<platf::client_input_t> client_context;
 
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event;
     platf::feedback_queue_t feedback_queue;

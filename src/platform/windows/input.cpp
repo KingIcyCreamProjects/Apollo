@@ -898,6 +898,17 @@ namespace platf {
     raw->activeTouchSlots = 0;
   }
 
+  /**
+   * @brief Restores the real screen origin of a touch port.
+   * @details The display code shifts offsets by the virtual screen origin so absolute mouse coordinates start
+   *          at 0,0, but pointer injection takes real screen coordinates where the primary monitor is at 0,0.
+   */
+  touch_port_t unshift_touch_port(touch_port_t touch_port) {
+    touch_port.offset_x += GetSystemMetrics(SM_XVIRTUALSCREEN);
+    touch_port.offset_y += GetSystemMetrics(SM_YVIRTUALSCREEN);
+    return touch_port;
+  }
+
   // These are edge-triggered pointer state flags that should always be cleared next frame
   constexpr auto EDGE_TRIGGERED_POINTER_FLAGS = POINTER_FLAG_DOWN | POINTER_FLAG_UP | POINTER_FLAG_CANCELED | POINTER_FLAG_UPDATE;
 
@@ -907,7 +918,8 @@ namespace platf {
    * @param touch_port The current viewport for translating to screen coordinates.
    * @param touch The touch event.
    */
-  void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch) {
+  void touch_update(client_input_t *input, const touch_port_t &touch_port_shifted, const touch_input_t &touch) {
+    auto touch_port = unshift_touch_port(touch_port_shifted);
     auto raw = (client_input_raw_t *) input;
 
     // Bail if we're not running on an OS that supports virtual touch input
@@ -1033,7 +1045,8 @@ namespace platf {
    * @param touch_port The current viewport for translating to screen coordinates.
    * @param pen The pen event.
    */
-  void pen_update(client_input_t *input, const touch_port_t &touch_port, const pen_input_t &pen) {
+  void pen_update(client_input_t *input, const touch_port_t &touch_port_shifted, const pen_input_t &pen) {
+    auto touch_port = unshift_touch_port(touch_port_shifted);
     auto raw = (client_input_raw_t *) input;
 
     // Bail if we're not running on an OS that supports virtual pen input
