@@ -579,6 +579,14 @@ namespace nvhttp {
     }
   }
 
+  /**
+   * @brief Whether a session waiting for a PIN is still inside PAIRING_PROMPT_GRACE.
+   * @details expires_at is only set when the session opens, so it also tells the age of the session.
+   */
+  static bool in_prompt_grace(const pair_session_t &sess, std::chrono::steady_clock::time_point now) {
+    return sess.last_phase == PAIR_PHASE::NONE && now < sess.expires_at - PAIRING_SESSION_TIMEOUT + PAIRING_PROMPT_GRACE;
+  }
+
   void fail_pair(pair_session_t &sess, pt::ptree &tree, const std::string status_msg) {
     tree.put("root.paired", 0);
     tree.put("root.<xmlattr>.status_code", 400);
@@ -830,7 +838,8 @@ namespace nvhttp {
     if (auto existing = map_id_sess.find(uniqID); existing != std::end(map_id_sess)) {
       // Another client must not displace a session right before the operator enters the PIN.
       // The same client can, as finishing the handshake needs the private key of that certificate.
-      if (existing->second.last_phase == PAIR_PHASE::NONE && existing->second.client.cert != sess.client.cert) {
+      // Past the grace period the prompt may be abandoned, and it must not lock out other devices.
+      if (in_prompt_grace(existing->second, now) && existing->second.client.cert != sess.client.cert) {
         tree.put("root.<xmlattr>.status_code", 409);
         tree.put("root.<xmlattr>.status_message", "Another client is pairing with this uniqueid");
 
@@ -1007,9 +1016,14 @@ namespace nvhttp {
       const auto now = std::chrono::steady_clock::now();
       expire_pair_sessions_unlocked(now);
 
+      // A prompt past the grace period gives way to newer ones, but keeps its PIN if it is the only one left
+      const bool any_in_grace = std::ranges::any_of(map_id_sess, [now](const auto &entry) {
+        return in_prompt_grace(entry.second, now);
+      });
+
       // The PIN names no session, so refuse it unless it can only reach one
-      const auto is_pending = [](const auto &entry) {
-        return entry.second.last_phase == PAIR_PHASE::NONE;
+      const auto is_pending = [now, any_in_grace](const auto &entry) {
+        return any_in_grace ? in_prompt_grace(entry.second, now) : entry.second.last_phase == PAIR_PHASE::NONE;
       };
       if (std::ranges::count_if(map_id_sess, is_pending) != 1) {
         return false;
@@ -1034,24 +1048,15 @@ namespace nvhttp {
       write_pair_response(async_response, tree);
     }
 
-    {
-      std::unique_lock lock {completion->mutex};
-      if (completion->condition.wait_until(lock, deadline, [&completion]() {
-            return completion->result.has_value();
-          })) {
-        return *completion->result;
-      }
-    }
+    std::unique_lock lock {completion->mutex};
+    completion->condition.wait_until(lock, deadline, [&completion]() {
+      return completion->result.has_value();
+    });
 
     // A wrong PIN ends here too, as Moonlight just stops the handshake when it sees the mismatch
-    std::scoped_lock lock {map_id_sess_mutex};
-    const auto sess_it = std::ranges::find_if(map_id_sess, [&completion](const auto &entry) {
-      return entry.second.completion == completion;
-    });
-    if (sess_it != std::end(map_id_sess)) {
-      remove_session(sess_it->second);
-    }
-    return false;
+    // The session stays until it expires, as a client that was suspended can still finish the handshake.
+    // It takes no further PIN, and a retry from the client replaces it.
+    return completion->result.value_or(false);
   }
 
   template<class T>
@@ -1971,7 +1976,11 @@ namespace nvhttp {
     // Wait for any event
     shutdown_event->view();
 
-    map_id_sess.clear();
+    {
+      // The servers still run here, and confighttp can call pin() until the process ends
+      std::scoped_lock lock {map_id_sess_mutex};
+      map_id_sess.clear();
+    }
 
     https_server.stop();
     http_server.stop();

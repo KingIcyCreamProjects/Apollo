@@ -289,6 +289,30 @@ namespace {
   }
 
   /**
+   * Moves a session past PAIRING_PROMPT_GRACE, without it expiring.
+   */
+  void age_past_prompt_grace(pair_session_t &sess) {
+    sess.expires_at = std::chrono::steady_clock::now() + PAIRING_SESSION_TIMEOUT - PAIRING_PROMPT_GRACE - 1s;
+  }
+
+  /**
+   * Runs the client side of the same handshake vectors as PairingTest. This removes the session.
+   */
+  void finish_handshake(pair_session_t &sess) {
+    boost::property_tree::ptree tree;
+    clientchallenge(sess, tree, util::from_hex_vec("741CD3D6890C16DA39D53BCA0893AAF0", true));
+    serverchallengeresp(sess, tree, util::from_hex_vec("920BABAE9F7599AA1CA8EC87FB3454C91872A7D8D5127DDC176C2FDAE635CF7A", true));
+    sess.serverchallenge = util::from_hex_vec("AAAAAAAAAAAAAAAA", true);
+    clientpairingsecret(
+      sess,
+      tree,
+      util::from_hex_vec("000102030405060708090A0B0C0D0EFF"  // secret
+                         "9BB74D8DE2FF006C3F47FC45EFDAA97D433783AFAB3ACD85CA7ED2330BB2A7BD18A5B044AF8CAC177116FAE8A6E8E44653A8944A0F8EA138B2E013756D847D2C4FC52F736E2E7E9B4154712B18F8307B2A161E010F0587744163E42ECA9EA548FC435756EDCF1FEB94037631ABB72B29DDAC0EA5E61F2DBFCC3B20AA021473CC85AC98D88052CA6618ED1701EFBF142C18D5E779A3155B84DF65057D4823EC194E6DF14006793E8D7A3DCCE20A911636C4E01ECA8B54B9DE9F256F15DE9A980EA024B30D77579140D45EC220C738164BDEEEBF7364AE94A5FF9B784B40F2E640CE8603017DEEAC7B2AD77B807C643B7B349C110FE15F94C7B3D37FF15FDFBE26",
+                         true)
+    );
+  }
+
+  /**
    * Runs the same handshake vectors as PairingTest against a session in the map,
    * while another thread waits in pin().
    */
@@ -314,18 +338,7 @@ namespace {
 
     {
       std::scoped_lock lock {map_id_sess_mutex};
-      auto &sess = map_id_sess.at("1234");
-      boost::property_tree::ptree tree;
-      clientchallenge(sess, tree, util::from_hex_vec("741CD3D6890C16DA39D53BCA0893AAF0", true));
-      serverchallengeresp(sess, tree, util::from_hex_vec("920BABAE9F7599AA1CA8EC87FB3454C91872A7D8D5127DDC176C2FDAE635CF7A", true));
-      sess.serverchallenge = util::from_hex_vec("AAAAAAAAAAAAAAAA", true);
-      clientpairingsecret(
-        sess,
-        tree,
-        util::from_hex_vec("000102030405060708090A0B0C0D0EFF"  // secret
-                           "9BB74D8DE2FF006C3F47FC45EFDAA97D433783AFAB3ACD85CA7ED2330BB2A7BD18A5B044AF8CAC177116FAE8A6E8E44653A8944A0F8EA138B2E013756D847D2C4FC52F736E2E7E9B4154712B18F8307B2A161E010F0587744163E42ECA9EA548FC435756EDCF1FEB94037631ABB72B29DDAC0EA5E61F2DBFCC3B20AA021473CC85AC98D88052CA6618ED1701EFBF142C18D5E779A3155B84DF65057D4823EC194E6DF14006793E8D7A3DCCE20A911636C4E01ECA8B54B9DE9F256F15DE9A980EA024B30D77579140D45EC220C738164BDEEEBF7364AE94A5FF9B784B40F2E640CE8603017DEEAC7B2AD77B807C643B7B349C110FE15F94C7B3D37FF15FDFBE26",
-                           true)
-      );
+      finish_handshake(map_id_sess.at("1234"));
     }
 
     EXPECT_EQ(result.get(), expected);
@@ -379,12 +392,48 @@ TEST_F(PairingSessionTest, PinRefusesWithoutSession) {
   EXPECT_FALSE(pin("5338", "test"));
 }
 
-TEST_F(PairingSessionTest, PinFailsAndDropsSessionOnTimeout) {
+TEST_F(PairingSessionTest, PinTimeoutKeepsSessionForLateHandshake) {
   config::stream.ping_timeout = 50ms;
+  const auto clients_before = get_all_clients().size();
   add_session("1234");
 
   EXPECT_FALSE(pin("5338", "test"));
+  ASSERT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::GETSERVERCERT);
+
+  finish_handshake(map_id_sess.at("1234"));
+
   EXPECT_TRUE(map_id_sess.empty());
+  EXPECT_EQ(get_all_clients().size(), clients_before + 1);
+}
+
+TEST_F(PairingSessionTest, PinSkipsAbandonedSessionWhenNewerOneWaits) {
+  config::stream.ping_timeout = 50ms;
+  age_past_prompt_grace(add_session("abandoned"));
+  add_session("1234");
+
+  EXPECT_FALSE(pin("5338", "test"));
+
+  EXPECT_EQ(map_id_sess.at("abandoned").last_phase, PAIR_PHASE::NONE);
+  EXPECT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::GETSERVERCERT);
+}
+
+TEST_F(PairingSessionTest, PinStillReachesLoneSessionPastGrace) {
+  config::stream.ping_timeout = 50ms;
+  age_past_prompt_grace(add_session("1234"));
+
+  EXPECT_FALSE(pin("5338", "test"));
+
+  EXPECT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::GETSERVERCERT);
+}
+
+TEST_F(PairingSessionTest, PinRefusesWhenTwoSessionsPastGraceAreWaiting) {
+  age_past_prompt_grace(add_session("1234"));
+  age_past_prompt_grace(add_session("5678"));
+
+  EXPECT_FALSE(pin("5338", "test"));
+
+  EXPECT_EQ(map_id_sess.at("1234").last_phase, PAIR_PHASE::NONE);
+  EXPECT_EQ(map_id_sess.at("5678").last_phase, PAIR_PHASE::NONE);
 }
 
 TEST_F(PairingSessionTest, PinReturnsTrueAfterHandshakeWithRightPin) {
@@ -432,6 +481,19 @@ TEST_F(PairingSessionTest, DifferentCertCannotTakeOverWaitingSession) {
   EXPECT_EQ(tree.get<int>("root.<xmlattr>.status_code"), 409);
   EXPECT_EQ(map_id_sess.at("1234").client.cert, cert);
   EXPECT_EQ(map_id_sess.at("1234").async_insert_pin.salt, SALT);
+}
+
+TEST_F(PairingSessionTest, DifferentCertDisplacesAbandonedSession) {
+  ASSERT_NE(start_pair_session(request_args(CERT_HEX, SALT), "1234", tree), nullptr);
+  auto &abandoned = map_id_sess.at("1234");
+  age_past_prompt_grace(abandoned);
+  const auto completion = abandoned.completion;
+
+  ASSERT_NE(start_pair_session(request_args(OTHER_CERT_HEX, OTHER_SALT), "1234", tree), nullptr);
+
+  EXPECT_EQ(map_id_sess.size(), 1u);
+  EXPECT_EQ(map_id_sess.at("1234").async_insert_pin.salt, OTHER_SALT);
+  EXPECT_EQ(completion->result, false);
 }
 
 TEST_F(PairingSessionTest, SameCertReplacesWaitingSession) {
