@@ -49,6 +49,12 @@ namespace input {
    */
   std::pair<float, float> scale_client_contact_area(const std::pair<float, float> &val, uint16_t rotation, const std::pair<float, float> &scalar);
 
+  enum class batch_result_e {
+    batched,  ///< This entry was batched with the source entry
+    not_batchable,  ///< Not eligible to batch but continue attempts to batch
+    terminate_batch,  ///< Stop trying to batch with this entry
+  };
+
 #ifdef SUNSHINE_TESTS
   namespace testing {
     /**
@@ -57,6 +63,14 @@ namespace input {
      * @return True when the packet is safe for typed processing.
      */
     bool is_valid_input_packet(std::span<const std::uint8_t> packet);
+
+    /**
+     * @brief Batch two raw input packets for a unit test.
+     * @param dest Packet to batch into.
+     * @param src Later packet to batch.
+     * @return The batching result.
+     */
+    batch_result_e batch_packets(std::vector<std::uint8_t> &dest, std::vector<std::uint8_t> &src);
   }  // namespace testing
 #endif
 }  // namespace input
