@@ -112,9 +112,14 @@ namespace input {
 
   static task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
   static std::unordered_map<key_press_id_t, bool> key_press {};
-  static std::array<std::uint8_t, 5> mouse_press {};
+  static std::array<std::uint8_t, 6> mouse_press {};  // indexed by button, BUTTON_X2 is 5
 
   static platf::input_t platf_input;
+#ifdef SUNSHINE_TESTS
+  // Unit tests install recorders here so nothing is typed or clicked on the host.
+  static std::function<void(uint16_t, bool, uint8_t)> keyboard_sink;
+  static std::function<void(int, bool)> mouse_sink;
+#endif
   static std::bitset<platf::MAX_GAMEPADS> gamepadMask {};
 
   void free_gamepad(platf::input_t &platf_input, int id) {
@@ -154,6 +159,19 @@ namespace input {
     button_state_e back_button_state;
   };
 
+  /**
+   * @brief Which client keys hold one modifier: generic, left and right are tracked apart.
+   */
+  struct modifier_state_t {
+    bool any_pressed() const {
+      return generic || left || right;
+    }
+
+    bool generic = false;
+    bool left = false;
+    bool right = false;
+  };
+
   struct input_t {
     enum shortkey_e {
       CTRL = 0x1,  ///< Control key
@@ -187,6 +205,10 @@ namespace input {
 
     // Keep track of alt+ctrl+shift key combo
     int shortcutFlags;
+
+    modifier_state_t shift_keys;
+    modifier_state_t control_keys;
+    modifier_state_t alt_keys;
 
     std::vector<gamepad_t> gamepads;
     // Shared so the destructor can hand it to the task pool, which serialises its destruction against
@@ -567,6 +589,26 @@ namespace input {
     platf::abs_mouse(platf_input, abs_port, tpcoords->first, tpcoords->second);
   }
 
+  void emit_mouse_button(int button, bool release) {
+#ifdef SUNSHINE_TESTS
+    if (mouse_sink) {
+      mouse_sink(button, release);
+      return;
+    }
+#endif
+    platf::button_mouse(platf_input, button, release);
+  }
+
+  void emit_keyboard_update(uint16_t key_code, bool release, uint8_t flags) {
+#ifdef SUNSHINE_TESTS
+    if (keyboard_sink) {
+      keyboard_sink(key_code, release, flags);
+      return;
+    }
+#endif
+    platf::keyboard_update(platf_input, key_code, release, flags);
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_MOUSE_BUTTON_PACKET packet) {
     if (!config::input.mouse) {
       return;
@@ -603,7 +645,7 @@ namespace input {
           // Already released left button
           return;
         }
-        platf::button_mouse(platf_input, BUTTON_LEFT, release);
+        emit_mouse_button(BUTTON_LEFT, release);
 
         mouse_press[BUTTON_LEFT] = false;
         input->mouse_left_button_timeout = nullptr;
@@ -617,15 +659,15 @@ namespace input {
       button == BUTTON_RIGHT && !release &&
       input->mouse_left_button_timeout > DISABLE_LEFT_BUTTON_DELAY
     ) {
-      platf::button_mouse(platf_input, BUTTON_RIGHT, false);
-      platf::button_mouse(platf_input, BUTTON_RIGHT, true);
+      emit_mouse_button(BUTTON_RIGHT, false);
+      emit_mouse_button(BUTTON_RIGHT, true);
 
       mouse_press[BUTTON_RIGHT] = false;
 
       return;
     }
 
-    platf::button_mouse(platf_input, button, release);
+    emit_mouse_button(button, release);
   }
 
   short map_keycode(short keycode) {
@@ -638,15 +680,54 @@ namespace input {
   }
 
   /**
+   * @brief Record which side of a modifier the client pressed or released.
+   */
+  void update_modifier_state(input_t &input, short keyCode, bool release) {
+    const bool pressed = !release;
+    switch (keyCode) {
+      case VKEY_SHIFT:
+        input.shift_keys.generic = pressed;
+        break;
+      case VKEY_LSHIFT:
+        input.shift_keys.left = pressed;
+        break;
+      case VKEY_RSHIFT:
+        input.shift_keys.right = pressed;
+        break;
+      case VKEY_CONTROL:
+        input.control_keys.generic = pressed;
+        break;
+      case VKEY_LCONTROL:
+        input.control_keys.left = pressed;
+        break;
+      case VKEY_RCONTROL:
+        input.control_keys.right = pressed;
+        break;
+      case VKEY_MENU:
+        input.alt_keys.generic = pressed;
+        break;
+      case VKEY_LMENU:
+        input.alt_keys.left = pressed;
+        break;
+      case VKEY_RMENU:
+        input.alt_keys.right = pressed;
+        break;
+    }
+  }
+
+  /**
    * @brief Update flags for keyboard shortcut combo's
    */
-  inline void update_shortcutFlags(int *flags, short keyCode, bool release) {
+  inline void update_shortcutFlags(input_t &input, short keyCode, bool release) {
+    int *flags = &input.shortcutFlags;
     switch (keyCode) {
       case VKEY_SHIFT:
       case VKEY_LSHIFT:
       case VKEY_RSHIFT:
         if (release) {
-          *flags &= ~input_t::SHIFT;
+          if (!input.shift_keys.any_pressed()) {
+            *flags &= ~input_t::SHIFT;
+          }
         } else {
           *flags |= input_t::SHIFT;
         }
@@ -655,7 +736,9 @@ namespace input {
       case VKEY_LCONTROL:
       case VKEY_RCONTROL:
         if (release) {
-          *flags &= ~input_t::CTRL;
+          if (!input.control_keys.any_pressed()) {
+            *flags &= ~input_t::CTRL;
+          }
         } else {
           *flags |= input_t::CTRL;
         }
@@ -664,7 +747,9 @@ namespace input {
       case VKEY_LMENU:
       case VKEY_RMENU:
         if (release) {
-          *flags &= ~input_t::ALT;
+          if (!input.alt_keys.any_pressed()) {
+            *flags &= ~input_t::ALT;
+          }
         } else {
           *flags |= input_t::ALT;
         }
@@ -693,28 +778,28 @@ namespace input {
     if (!release) {
       // Press any synthetic modifiers required for this key
       if (synthetic_modifiers & MODIFIER_SHIFT) {
-        platf::keyboard_update(platf_input, VKEY_SHIFT, false, flags);
+        emit_keyboard_update(VKEY_SHIFT, false, flags);
       }
       if (synthetic_modifiers & MODIFIER_CTRL) {
-        platf::keyboard_update(platf_input, VKEY_CONTROL, false, flags);
+        emit_keyboard_update(VKEY_CONTROL, false, flags);
       }
       if (synthetic_modifiers & MODIFIER_ALT) {
-        platf::keyboard_update(platf_input, VKEY_MENU, false, flags);
+        emit_keyboard_update(VKEY_MENU, false, flags);
       }
     }
 
-    platf::keyboard_update(platf_input, map_keycode(key_code), release, flags);
+    emit_keyboard_update(map_keycode(key_code), release, flags);
 
     if (!release) {
       // Raise any synthetic modifier keys we pressed
       if (synthetic_modifiers & MODIFIER_SHIFT) {
-        platf::keyboard_update(platf_input, VKEY_SHIFT, true, flags);
+        emit_keyboard_update(VKEY_SHIFT, true, flags);
       }
       if (synthetic_modifiers & MODIFIER_CTRL) {
-        platf::keyboard_update(platf_input, VKEY_CONTROL, true, flags);
+        emit_keyboard_update(VKEY_CONTROL, true, flags);
       }
       if (synthetic_modifiers & MODIFIER_ALT) {
-        platf::keyboard_update(platf_input, VKEY_MENU, true, flags);
+        emit_keyboard_update(VKEY_MENU, true, flags);
       }
     }
   }
@@ -738,6 +823,8 @@ namespace input {
 
     auto release = util::endian::little(packet->header.magic) == KEY_UP_EVENT_MAGIC;
     auto keyCode = packet->keyCode & 0x00FF;
+
+    update_modifier_state(*input, keyCode, release);
 
     // Set synthetic modifier flags if the keyboard packet is requesting modifier
     // keys that are not current pressed.
@@ -783,7 +870,8 @@ namespace input {
 
     send_key_and_modifiers(keyCode, release, packet->flags, synthetic_modifiers);
 
-    update_shortcutFlags(&input->shortcutFlags, map_keycode(keyCode), release);
+    // Track the client's modifier, not the remapped host key: it is compared with packet->modifiers above.
+    update_shortcutFlags(*input, keyCode, release);
   }
 
   /**
@@ -1733,27 +1821,41 @@ namespace input {
     task_pool.push(passthrough_next_message, input);
   }
 
+  /**
+   * @brief Release every held mouse button and key.
+   * @param release_left Also release left, when its delayed release was cancelled before it ran.
+   */
+  void release_held_input(bool release_left) {
+    if (release_left) {
+      emit_mouse_button(BUTTON_LEFT, true);
+    }
+
+    for (int x = 0; x < mouse_press.size(); ++x) {
+      if (mouse_press[x]) {
+        emit_mouse_button(x, true);
+        mouse_press[x] = false;
+      }
+    }
+
+    for (auto &kp : key_press) {
+      if (!kp.second) {
+        // already released
+        continue;
+      }
+      // key_press holds the client's key, but the press went out through map_keycode(): release that host key.
+      emit_keyboard_update(map_keycode(vk_from_kpid(kp.first) & 0x00FF), true, flags_from_kpid(kp.first));
+      key_press[kp.first] = false;
+    }
+  }
+
   void reset(std::shared_ptr<input_t> &input) {
     task_pool.cancel(key_press_repeat_id);
-    task_pool.cancel(input->mouse_left_button_timeout);
+    // The delayed left release never runs once cancelled, which would leave the button down on the host.
+    const bool left_pending = task_pool.cancel(input->mouse_left_button_timeout);
 
     // Ensure input is synchronous, by using the task_pool
-    task_pool.push([]() {
-      for (int x = 0; x < mouse_press.size(); ++x) {
-        if (mouse_press[x]) {
-          platf::button_mouse(platf_input, x, true);
-          mouse_press[x] = false;
-        }
-      }
-
-      for (auto &kp : key_press) {
-        if (!kp.second) {
-          // already released
-          continue;
-        }
-        platf::keyboard_update(platf_input, vk_from_kpid(kp.first) & 0x00FF, true, flags_from_kpid(kp.first));
-        key_press[kp.first] = false;
-      }
+    task_pool.push([left_pending]() {
+      release_held_input(left_pending);
     });
   }
 
@@ -1805,6 +1907,40 @@ namespace input {
 
     batch_result_e batch_packets(std::vector<std::uint8_t> &dest, std::vector<std::uint8_t> &src) {
       return ::input::batch((PNV_INPUT_HEADER) dest.data(), (PNV_INPUT_HEADER) src.data());
+    }
+
+    void set_sinks(std::function<void(uint16_t, bool, uint8_t)> keyboard, std::function<void(int, bool)> mouse) {
+      keyboard_sink = std::move(keyboard);
+      mouse_sink = std::move(mouse);
+    }
+
+    std::shared_ptr<input_t> alloc_input() {
+      // Not alloc(): that queues a real mouse move.
+      auto mail = std::make_shared<safe::mail_raw_t>();
+      return std::make_shared<input_t>(mail->event<input::touch_port_t>(mail::touch_port), mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback));
+    }
+
+    void send_keyboard_packet(std::shared_ptr<input_t> &input, std::uint16_t key_code, std::uint8_t modifiers, bool release) {
+      NV_KEYBOARD_PACKET packet {};
+      packet.header.magic = util::endian::little(release ? KEY_UP_EVENT_MAGIC : KEY_DOWN_EVENT_MAGIC);
+      packet.keyCode = static_cast<short>(key_code);
+      packet.modifiers = static_cast<char>(modifiers);
+      ::input::passthrough(input, &packet);
+    }
+
+    void send_mouse_button_packet(std::shared_ptr<input_t> &input, int button, bool release) {
+      NV_MOUSE_BUTTON_PACKET packet {};
+      packet.header.magic = util::endian::little(release ? MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5 : MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5);
+      packet.button = util::endian::big<std::uint8_t>(button);
+      ::input::passthrough(input, &packet);
+    }
+
+    void release_held(bool release_left) {
+      release_held_input(release_left);
+    }
+
+    void clear_key_state() {
+      key_press.clear();
     }
   }  // namespace testing
 #endif
