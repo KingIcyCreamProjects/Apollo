@@ -229,7 +229,7 @@ namespace platf {
     // Iterate through the list of adapters
     while (pAdapter) {
       IP_ADDR_STRING* pGateway = &pAdapter->GatewayList;
-      if (pGateway && pGateway->IpAddress.String[0] != '\0') {
+      if (pGateway && pGateway->IpAddress.String[0] != '\0' && strcmp(pGateway->IpAddress.String, "0.0.0.0") != 0) {
         // This adapter has a default gateway, use its IP address
         local_ip = pAdapter->IpAddressList.IpAddress.String;
         break;
