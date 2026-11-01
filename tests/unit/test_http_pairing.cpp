@@ -685,7 +685,7 @@ TEST_F(ClientAuthStateTest, LoadStateReadsStringifiedValues) {
     {"name", "phone"},
     {"cert", other_cert()},
     {"uuid", "u1"},
-    {"perm", "1"},
+    {"perm", "65536"},  // PERM::clipboard_set; bit 0 is reserved and masked off
     {"allow_client_commands", "false"},
     {"enable_legacy_ordering", "true"},
     {"always_use_virtual_display", "false"}
@@ -697,7 +697,7 @@ TEST_F(ClientAuthStateTest, LoadStateReadsStringifiedValues) {
 
   auto clients = get_all_clients();
   ASSERT_EQ(clients.size(), 1u);
-  EXPECT_EQ(clients[0]["perm"].get<uint32_t>(), 1u);
+  EXPECT_EQ(clients[0]["perm"].get<uint32_t>(), 65536u);
   EXPECT_FALSE(clients[0]["allow_client_commands"].get<bool>());
 }
 
