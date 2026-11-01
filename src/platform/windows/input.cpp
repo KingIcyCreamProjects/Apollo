@@ -204,7 +204,9 @@ namespace platf {
       VIGEM_ERROR status = vigem_connect(client.get());
       if (!VIGEM_SUCCESS(status)) {
         // Log a special fatal message for this case to show the error in the web UI
-        BOOST_LOG(fatal) << "ViGEmBus is not installed or running. You must install ViGEmBus for gamepad support!"sv;
+        BOOST_LOG(fatal) << "ViGEmBus is not installed or running [0x"sv << util::hex(status).to_string_view() << "]. Gamepads are disabled; keyboard, mouse and touch still work. Install ViGEmBus to enable gamepad support."sv;
+        // Leave vigem null so gamepad packets are ignored instead of retrying the connection per packet
+        return -1;
       } else {
         vigem_disconnect(client.get());
       }
