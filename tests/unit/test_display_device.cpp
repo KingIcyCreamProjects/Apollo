@@ -7,6 +7,7 @@
 #include <format>
 #include <src/config.h>
 #include <src/display_device.h>
+#include <src/process.h>
 #include <src/rtsp.h>
 
 namespace {
@@ -268,7 +269,7 @@ TEST_P(ParseRefreshRateOption, IntegrationTest) {
   rtsp_stream::launch_session_t session {};
   if (const auto *client_refresh_rate {std::get_if<client_fps_t>(&input_refresh_rate)}; client_refresh_rate) {
     video_config.dd.manual_refresh_rate = {};
-    session.fps = *client_refresh_rate;
+    session.fps = *client_refresh_rate * 1000;
   } else {
     video_config.dd.manual_refresh_rate = std::get<std::string>(input_refresh_rate);
     session.fps = {};
@@ -285,6 +286,29 @@ TEST_P(ParseRefreshRateOption, IntegrationTest) {
 
     EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, expected_refresh_rate);
   }
+}
+
+TEST(DoubleRefreshRate, OnlyAppliedToVirtualDisplay) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::verify_only;
+  video_config.dd.refresh_rate_option = refresh_rate_option_e::automatic;
+  video_config.double_refreshrate = true;
+
+  rtsp_stream::launch_session_t session {};
+  session.fps = 60000;
+
+  proc::proc.virtual_display = true;
+  auto result {display_device::parse_configuration(video_config, session)};
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {120, 1})));
+
+  proc::proc.virtual_display = false;
+  result = display_device::parse_configuration(video_config, session);
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {60, 1})));
+
+  // Client requested a virtual display but none exists (resume, creation failed): physical display must not be doubled.
+  session.virtual_display = true;
+  result = display_device::parse_configuration(video_config, session);
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, display_device::FloatingPoint((rational_t {60, 1})));
 }
 
 namespace {
@@ -485,7 +509,7 @@ namespace {
         video_config.dd.refresh_rate_option = disabled;
       } else if (const auto *auto_fps {std::get_if<auto_value_t<fps_t>>(&input_fps)}; auto_fps) {
         video_config.dd.refresh_rate_option = automatic;
-        session.fps = auto_fps->value;
+        session.fps = auto_fps->value * 1000;
       } else {
         const auto [manual_fps] = std::get<manual_value_t<fps_t>>(input_fps);
         video_config.dd.refresh_rate_option = manual;

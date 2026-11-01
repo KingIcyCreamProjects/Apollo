@@ -18,6 +18,7 @@
 // local includes
 #include "audio.h"
 #include "platform/common.h"
+#include "process.h"
 #include "rtsp.h"
 
 // platform-specific includes
@@ -368,7 +369,9 @@ namespace display_device {
         case refresh_rate_option_e::automatic:
           {
             if (session.fps >= 0) {
-              config.m_refresh_rate = Rational {static_cast<unsigned int>(session.fps), 1000};
+              // session.fps is in millihertz. The virtual display was created at double this rate, keep it that way.
+              const auto fps = static_cast<unsigned int>(session.fps) * (video_config.double_refreshrate && proc::proc.virtual_display ? 2 : 1);
+              config.m_refresh_rate = fps % 1000 == 0 ? Rational {fps / 1000, 1} : Rational {fps, 1000};
             } else {
               BOOST_LOG(error) << "FPS value provided by client session config is invalid: " << session.fps;
               return false;
