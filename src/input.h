@@ -80,6 +80,8 @@ namespace input {
     /// Body of the task reset() queues.
     void release_held(bool release_left);
     void clear_key_state();
+    /// Run reset(), then the tasks it queued (no pool thread runs in tests).
+    void reset_and_drain(std::shared_ptr<input_t> &input);
   }  // namespace testing
 #endif
 }  // namespace input

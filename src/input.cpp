@@ -1942,6 +1942,13 @@ namespace input {
     void clear_key_state() {
       key_press.clear();
     }
+
+    void reset_and_drain(std::shared_ptr<input_t> &input) {
+      reset(input);
+      while (auto task = task_pool.pop()) {
+        (*task)->run();
+      }
+    }
   }  // namespace testing
 #endif
 }  // namespace input

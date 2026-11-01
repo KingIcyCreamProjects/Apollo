@@ -95,7 +95,11 @@ TEST_F(HeldStateTest, ResetReleasesButtonX2) {
 }
 
 TEST_F(HeldStateTest, ResetReleasesLeftWhenDelayedReleaseWasCancelled) {
-  input::testing::release_held(true);
+  input::testing::send_mouse_button_packet(in, BUTTON_LEFT, false);
+  input::testing::send_mouse_button_packet(in, BUTTON_LEFT, true);
+  buttons.clear();
+
+  input::testing::reset_and_drain(in);
   ASSERT_EQ(buttons.size(), 1u);
-  EXPECT_EQ(buttons[0], std::make_pair(1, true));
+  EXPECT_EQ(buttons[0], std::make_pair(BUTTON_LEFT, true));
 }
