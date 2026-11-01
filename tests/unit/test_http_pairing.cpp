@@ -10,6 +10,7 @@
 #include <src/nvhttp.h>
 #include <src/uuid.h>
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -585,11 +586,25 @@ TEST_F(ClientAuthStateTest, UnpairWithFailedWriteRevokesAndFails) {
 TEST_F(ClientAuthStateTest, EraseAllWithFailedWriteRevokes) {
   block_state_writes();
 
-  erase_all_clients();
+  EXPECT_FALSE(erase_all_clients());
 
   EXPECT_FALSE(trusted(PUBLIC_CERT));
   EXPECT_FALSE(trusted(other_cert()));
   EXPECT_TRUE(get_all_clients().empty());
+}
+
+TEST_F(ClientAuthStateTest, UpdateWithFailedWriteChangesInMemoryAndFails) {
+  block_state_writes();
+
+  EXPECT_FALSE(update_device_info(target->uuid, "renamed", "", {}, {}, crypto::PERM::_no, true, true, false));
+
+  auto clients = get_all_clients();
+  auto client = std::find_if(clients.begin(), clients.end(), [this](const auto &node) {
+    return node["uuid"] == target->uuid;
+  });
+  ASSERT_TRUE(client != clients.end());
+  EXPECT_EQ((*client)["name"].get<std::string>(), "renamed");
+  EXPECT_EQ((*client)["perm"].get<uint32_t>(), static_cast<uint32_t>(crypto::PERM::_no));
 }
 
 TEST_F(ClientAuthStateTest, AddWithDamagedFileTrustsInMemory) {

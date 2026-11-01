@@ -402,14 +402,15 @@ namespace nvhttp {
   }
 
   void add_authorized_client(const p_named_cert_t& named_cert_p) {
+    // The tray call waits for the tray thread, so it stays out of the lock
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    system_tray::update_tray_paired(named_cert_p->name);
+#endif
+
     std::scoped_lock lock {client_auth_mutex};
 
     client_t &client = client_root;
     client.named_devices.push_back(named_cert_p);
-
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-    system_tray::update_tray_paired(named_cert_p->name);
-#endif
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
       sync_client_state();
@@ -1796,6 +1797,8 @@ namespace nvhttp {
     bool clean_slate = config::sunshine.flags[config::flag::FRESH_STATE];
 
     if (!clean_slate) {
+      // The config server starts at the same time, so its web UI requests can already be running
+      std::scoped_lock lock {client_auth_mutex};
       load_state();
     }
 
@@ -1938,13 +1941,13 @@ namespace nvhttp {
     return one_time_pin;
   }
 
-  void
+  bool
   erase_all_clients() {
     std::scoped_lock lock {client_auth_mutex};
 
     client_t client;
     client_root = client;
-    sync_client_state();
+    return sync_client_state();
   }
 
   void stop_session(stream::session_t& session, bool graceful) {
@@ -2005,8 +2008,7 @@ namespace nvhttp {
         named_cert_p->enable_legacy_ordering = enable_legacy_ordering;
         named_cert_p->allow_client_commands = allow_client_commands;
         named_cert_p->always_use_virtual_display = always_use_virtual_display;
-        save_state();
-        return true;
+        return save_state();
       }
     }
 

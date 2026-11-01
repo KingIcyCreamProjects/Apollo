@@ -245,14 +245,14 @@ namespace nvhttp {
 
   /**
    * @brief Write the paired clients to the state file.
-   * @details The caller holds the client state lock, or runs before the servers start.
+   * @details The caller holds the client state lock, or is a single-threaded test.
    * @return Whether the state file was written.
    */
   bool save_state();
 
   /**
    * @brief Load the paired clients from the state file.
-   * @details The caller holds the client state lock, or runs before the servers start.
+   * @details The caller holds the client state lock, or is a single-threaded test.
    * A file that can't be parsed leaves the clients in memory as they are.
    */
   void load_state();
@@ -294,11 +294,13 @@ namespace nvhttp {
 
   /**
    * @brief Remove all paired clients.
+   * @details The clients stop being trusted even when the state file can't be written.
+   * @return Whether the state file was written.
    * @examples
    * nvhttp::erase_all_clients();
    * @examples_end
    */
-  void erase_all_clients();
+  bool erase_all_clients();
 
   /**
    * @brief      Stops a session.
